@@ -41,7 +41,7 @@
 
 namespace {
 
-constexpr char GS_VERSION[] = "0.2.0";
+constexpr char GS_VERSION[] = "0.2.1";
 
 // Offsets, build d873a1c8d2044cef. CODE_CHECKS below turns the whole mod off on any other exe.
 constexpr uintptr_t ST_SESSION = 0xc98;    // session: +0x1e8 state, +0x1a8 descriptor

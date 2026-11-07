@@ -98,7 +98,7 @@ The FIA has not published its trigger values, so these are my own tuning values:
 To check that it runs, look in the log (`swofty\loader.log` in your F1 25 folder, while the game runs) for:
 
 ```
-[gridstart] 0.2.0 ready: build check ok, ...
+[gridstart] 0.2.1 ready: build check ok, ...
 [gridstart] StartLights enter: 23 cars, 22 F1 2026, 0 others with an ERS (handling version 9, max deploy 350000 W)
 [gridstart] run started: game delay 0.00 s, Pre-Start +5.00 s, launch model on, safety net on, AI on, spool 3.0 s at 10000 rpm
 [gridstart] LIGHTS OUT after W s of waiting (...); C cars seen, player car N, boost B%, peak P rpm
