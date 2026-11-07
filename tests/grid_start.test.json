@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "suite": "nick.grid-start-2026",
+  "defaults": {
+    "timeout_s": 240,
+    "addons": [
+      "swofty.core",
+      "nick.grid-start-2026"
+    ]
+  },
+  "tests": [
+    {
+      "id": "loads_and_hooks_install",
+      "tags": [
+        "smoke"
+      ],
+      "fresh": true,
+      "env": {
+        "kind": "boot"
+      },
+      "steps": [
+        {
+          "wait": {
+            "log": "\\[gridstart\\] overlay: painting"
+          },
+          "timeout_s": 120
+        }
+      ],
+      "assert": [
+        {
+          "log": "conflict: .*grid_start_2026",
+          "max": 0
+        },
+        {
+          "log": "addon grid_start_2026\\.dll dropped",
+          "max": 0
+        },
+        {
+          "log": "\\[gridstart\\] [0-9.]+ ready: build check ok, mixins 1",
+          "min": 1
+        },
+        {
+          "log": "wrap Sess_StartLights_Enter at .* installed: .*grid_start_2026",
+          "min": 1
+        },
+        {
+          "log": "wrap Car_Powertrain_Step at .* installed: .*grid_start_2026",
+          "min": 1
+        },
+        {
+          "no_crash": true
+        }
+      ]
+    },
+    {
+      "id": "cars_are_read_at_the_lights",
+      "fresh": true,
+      "env": {
+        "kind": "benchmark",
+        "track": "bahrain",
+        "laps": 1,
+        "cars": 10,
+        "weather": "clear"
+      },
+      "steps": [
+        {
+          "wait": {
+            "log": "\\[gridstart\\] StartLights enter: [1-9][0-9]* cars"
+          },
+          "timeout_s": 180
+        }
+      ],
+      "assert": [
+        {
+          "log": "conflict: .*grid_start_2026",
+          "max": 0
+        },
+        {
+          "log": "addon grid_start_2026\\.dll dropped",
+          "max": 0
+        },
+        {
+          "log": "\\[gridstart\\] run started",
+          "max": 0
+        },
+        {
+          "no_crash": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "nick.grid-start-2026",
+  "name": "Spool Up: 2026 Race Starts",
+  "version": "0.2.0",
+  "author": "nyannoying",
+  "description": "The 2026 start the game leaves out, on F1 2026 cars: a 5 s Pre-Start, a turbo you spool yourself, AI that can fumble and the low-output safety net. Offline Grand Prix and Career, races and sprints. Other cars keep the game's normal start.",
+  "license": "LicenseRef-Spool-Up-Attribution-1.0",
+  "homepage": "https://github.com/nyannoying1337/f1-25-spool-up",
+  "icon": "icon.png",
+  "kind": ["native"],
+  "category": "utility",
+  "compat": { "game": "f1_25", "game_builds": [], "launcher": ">=1.8.16" },
+  "requires": [{ "id": "swofty.core", "version": ">=0.2.13" }],
+  "experimental_features": ["overlay"],
+  "options": [
+    { "id": "pre_start", "type": "toggle", "label": "Pre-Start phase", "default": true, "binds": "native",
+      "description": "Adds the FIA's 5 s flashing blue phase before the first red light (Article B5.7.2 b). F1 2026 cars only." },
+    { "id": "launch_model", "type": "toggle", "label": "2026 launch physics", "default": true, "binds": "native",
+      "description": "Engine power depends on the turbo spool you built before lights out, and AI cars get random starts: mostly clean, some poor, a few fumbled. The MGU-K limit below 50 km/h is in the game's own 2026 car data, so it applies either way." },
+    { "id": "safety_net", "type": "toggle", "label": "Low-output start safety net", "default": true, "binds": "native",
+      "description": "A car low on power that accelerates abnormally slowly gets just enough MGU-K from its own battery to keep a minimum acceleration until 50 km/h, and a flashing on-screen warning. AI cars too." },
+    { "id": "apply_to_ai", "type": "toggle", "label": "Apply launch physics to AI", "default": true, "binds": "native",
+      "description": "Off gives every AI car its normal launch, with no bad starts, which makes your start much harder." },
+    { "id": "spool_seconds", "type": "slider", "label": "Turbo spool time (s)", "min": 1, "max": 8, "step": 0.5, "default": 3, "binds": "native",
+      "description": "Mod tuning value, not an FIA number: seconds at high revs to reach full boost." },
+    { "id": "spool_rpm", "type": "slider", "label": "Spool revs (rpm)", "min": 6000, "max": 14000, "step": 500, "default": 10000, "binds": "native",
+      "description": "Mod tuning value: engine speed above which the turbo gains boost." }
+  ],
+  "operations": {
+    "native": [{ "dll": "native/grid_start_2026.dll" }]
+  }
+}
