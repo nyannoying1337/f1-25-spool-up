@@ -10,6 +10,17 @@
 // 5 s there delays the game's own sequence, so the lights, the AI reactions and the jump start rules are untouched. The
 // update skips the countdown while the session is paused, so the Pre-Start pauses with the game.
 //
+// Trackside panels. The light panels along the track are models that the game's marshal lights system colours itself.
+// Every tick it writes a colour and a mode into each zone, then hands the zone to its zone update (0x142c786b0), which
+// sends both to the model's shader. During Pre-Start the wrap on that update writes the game's own blue flag values on the
+// flash's on half and its own off values on the other half. The game writes both again on its next tick, so nothing needs
+// putting back. The gantry's start lights stay the game's: their texture has no blue lamps.
+//
+// HUD. The game draws the words itself, through the core's SwoftyCoreHud: PRE-START in the lap counter of its timing
+// tower, and LOW-OUTPUT START or SLOW CAR AHEAD in its message box, the one that shows DRS ENABLED. The overlay draws what
+// the game has no element for, in the game's shapes and colours: five blue start lights where its red ones come on, and
+// the turbo spool gauge above the dash. When the game HUD is not there, the overlay draws the words too.
+//
 // MGU-K. The handling file of every F1 2026 car has a deploy curve that is 0 up to 13.89 m/s, which is 50 km/h, and
 // Car_Powertrain_Step caps the deploy at curve x max deploy for every car, AI included (0x1446e2a3d, 0x1446e2c30). That is
 // the 50 km/h rule, and this mod leaves it alone on every car but one the safety net has flagged. For a flagged car below
@@ -41,7 +52,7 @@
 
 namespace {
 
-constexpr char GS_VERSION[] = "0.2.1";
+constexpr char GS_VERSION[] = "0.2.2";
 
 // Offsets, build d873a1c8d2044cef. CODE_CHECKS below turns the whole mod off on any other exe.
 constexpr uintptr_t ST_SESSION = 0xc98;    // session: +0x1e8 state, +0x1a8 descriptor
@@ -79,6 +90,16 @@ constexpr uintptr_t CH_RIGID = 0x340;      // physics -> rigid -> body, as the g
 constexpr uintptr_t RIGID_BODY = 0x18;
 constexpr uintptr_t BODY_POS = 0x1c0;      // 3 floats, world, m
 constexpr uintptr_t BODY_VEL = 0x220;      // 3 floats, world, m/s
+constexpr uintptr_t MARSHAL_SHADERS = 0xa0; // u8 in the marshal lights system: 0 and the zone update sends nothing
+constexpr uintptr_t ZONE_COLOUR = 0x10;    // float4, then the mode: the two the zone update sends to the panel's shader
+constexpr uintptr_t ZONE_MODE = 0x20;      // float4
+constexpr uintptr_t ZONE_MODEL = 0x40;     // 0 for a zone with no panel model
+constexpr uintptr_t MODEL_INSTANCE = 0x80; // 0 while the model is not in the world
+
+// The game's own panel values: its blue flag (0x14607b7b0 with mode 0x14607b6d0) and all off (0x14607b730 with 0x14607b6b0).
+constexpr float PANEL_BLUE[4] = {0.f, 0.f, 1.f, 0.f};
+constexpr float PANEL_LIT[4] = {0.f, 0.f, 0.f, 1.f};
+constexpr float PANEL_OFF[4] = {0.f, 0.f, 0.f, 0.f};
 
 struct CodeCheck {
     uintptr_t rva;
@@ -124,6 +145,18 @@ const CodeCheck CODE_CHECKS[] = {
     {0x46e2984, "deploy curve flag", {0x41, 0x80, 0xBE, 0x62, 0x1A, 0x00, 0x00, 0x00}, 8},
     {0x46e29cd, "deploy curve call", {0x48, 0x83, 0xC1, 0x18, 0xC5, 0xF8, 0x28, 0x4C, 0x24, 0x40, 0xE8, 0xB4, 0x58, 0x7A, 0xFE}, 15},
     {0x46e2a3d, "cap: curve x max deploy", {0xC5, 0xFA, 0x59, 0xF3}, 4},
+    {0x2c786b7, "zone update arguments", {0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF}, 6},
+    {0x2c78721, "zone update shader switch", {0x80, 0xBF, 0xA0, 0x00, 0x00, 0x00, 0x00}, 7},
+    {0x2c7872e, "zone model", {0x48, 0x8B, 0x7E, 0x40, 0x48, 0x85, 0xFF}, 7},
+    {0x2c7873b, "zone model instance", {0x48, 0x8B, 0x8F, 0x80, 0x00, 0x00, 0x00}, 7},
+    {0x2c7874b, "zone colour sent", {0x48, 0x83, 0xC6, 0x10}, 4},
+    {0x2c78767, "two values sent", {0x41, 0xB9, 0x02, 0x00, 0x00, 0x00}, 6},
+    {0x2c7876d, "the send", {0xE8, 0x6E, 0x51, 0x0C, 0x01}, 5},
+    {0x2c776b5, "panels off, colour", {0xC4, 0xC1, 0x78, 0x29, 0x46, 0x10}, 6},
+    {0x2c776c3, "panels off, mode", {0xC4, 0xC1, 0x78, 0x29, 0x5E, 0x20}, 6},
+    {0x2c77686, "zone update call", {0xE8, 0x25, 0x10, 0x00, 0x00}, 5},
+    {0x2c77baa, "blue flag, colour", {0xC4, 0xC1, 0x78, 0x29, 0x46, 0x10}, 6},
+    {0x2c77bb6, "blue flag, mode", {0xC4, 0xC1, 0x78, 0x29, 0x5E, 0x20}, 6},
 };
 
 constexpr uint32_t MAX_CARS = 26;
@@ -142,6 +175,7 @@ const SwoftyApi *g_api;
 const SwoftyCarOps *g_cars;
 const SwoftyOverlay *g_ov;
 const SwoftyHooks *g_hooks;
+const SwoftyHud *g_hud; // the game's own HUD: its lap counter and its message box
 uint32_t g_ov_ver = 1, g_ov_token, g_power_field;
 double g_ov_retry;
 
@@ -149,6 +183,8 @@ using EnterFn = uintptr_t (*)(void *, void *, void *, void *);
 using PowertrainFn = void (*)(void *);
 EnterFn g_enter_orig;
 PowertrainFn g_powertrain_orig;
+using ZoneFn = void (*)(void *, void *);
+ZoneFn g_zone_orig;
 
 template <class... A> void glog(const char *fmt, A... a)
 {
@@ -253,11 +289,17 @@ std::atomic<uintptr_t> g_pending_st{0};
 std::atomic<float> g_pending_delay{0};
 std::atomic<bool> g_pending_pre{false};
 std::atomic<const char *> g_end_request{nullptr};
-std::atomic<bool> g_armed{false}; // session.start said this is an offline race
+std::atomic<bool> g_offline{false};    // session.start: Grand Prix, Driver Career or My Team
+std::atomic<bool> g_race_label{false}; // session.start: the core's session label says race or sprint
 
 // Frame to overlay
 std::atomic<float> g_player_boost{0}, g_delay_left{0};
 std::atomic<bool> g_player_flag{false}, g_ahead_flag{false}, g_frozen{false};
+std::atomic<bool> g_hud_ok{false};      // the game HUD takes writes and messages now
+std::atomic<bool> g_lap_refused{false}; // it refused a lap counter write in this run: PRE-START shows on the overlay
+std::atomic<int> g_overlay_msg{0};      // a warning the game's message box did not take: 1 LOW-OUTPUT START, 2 SLOW CAR AHEAD
+std::atomic<uint32_t> g_zone_updates{0}, g_zone_ticks{0}, g_zone_shaders{0}, g_zone_models{0}, g_zone_blue{0};
+std::atomic<uintptr_t> g_zone_first{0};
 
 // Frame only
 struct CarRun {
@@ -273,6 +315,9 @@ float g_launch_s, g_delay_prev;
 uint64_t g_delay_ms;
 int g_player = -1;
 bool g_data_logged, g_layers_dirty;
+bool g_lap_row, g_told_player, g_told_ahead; // PRE-START is in the lap counter; each message once per run
+bool g_low_overlay, g_ahead_overlay;         // the game's box did not take that message
+double g_lap_row_at;
 std::mt19937 g_rng{std::random_device{}()};
 
 // ------------------------------------------------------------------------------------------------
@@ -440,11 +485,14 @@ void on_enter(uintptr_t st, uint8_t once)
         rd(desc, kind);
         rd(desc + 4, type);
     }
-    if (!g_armed.load()) {
-        glog("StartLights enter: standard start, not an offline race (kind %u, type %u)", kind, type);
+    if (!g_offline.load()) {
+        glog("StartLights enter: standard start, not an offline mode (kind %u, type %u)", kind, type);
         return;
     }
-    if (type >= 1 && type <= 18 && (type < 15 || type > 17)) {
+    // The core's session label stays at the first session of a weekend: a career weekend entered at practice still says
+    // practice_1 in its race. The game's own type here decides, and the label only when the type is outside the table.
+    bool race = type >= 1 && type <= 18 ? type >= 15 && type <= 17 : g_race_label.load();
+    if (!race) {
         glog("StartLights enter: standard start, session type %u is not a race (kind %u)", type, kind);
         return;
     }
@@ -477,6 +525,47 @@ void on_enter_guarded(uintptr_t st, uint8_t once)
         on_enter(st, once);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+// The game's own delay, if it has one, runs first: the FIA phase is its last 5 s.
+bool pre_start_showing()
+{
+    return g_phase.load(RELAXED) == P_PRE && !g_frozen.load(RELAXED) && g_delay_left.load(RELAXED) <= float(gs::PRE_START_S) + 0.05f;
+}
+
+bool flash_on()
+{
+    return std::fmod(now_s(), 0.5) < 0.25; // 2 Hz
+}
+
+void paint_panel(uintptr_t sys, uintptr_t zone)
+{
+    __try {
+        bool on = flash_on();
+        memcpy(reinterpret_cast<void *>(zone + ZONE_COLOUR), on ? PANEL_BLUE : PANEL_OFF, sizeof PANEL_BLUE);
+        memcpy(reinterpret_cast<void *>(zone + ZONE_MODE), on ? PANEL_LIT : PANEL_OFF, sizeof PANEL_LIT);
+        // For the log line at the end of Pre-Start. The reads below are the ones the game's update makes next.
+        uintptr_t first = 0;
+        if (g_zone_first.compare_exchange_strong(first, zone, RELAXED) || first == zone)
+            g_zone_ticks.fetch_add(1, RELAXED);
+        g_zone_updates.fetch_add(1, RELAXED);
+        if (on)
+            g_zone_blue.fetch_add(1, RELAXED);
+        if (*reinterpret_cast<const uint8_t *>(sys + MARSHAL_SHADERS)) {
+            g_zone_shaders.fetch_add(1, RELAXED);
+            uintptr_t model = *reinterpret_cast<const uintptr_t *>(zone + ZONE_MODEL);
+            if (model && *reinterpret_cast<const uintptr_t *>(model + MODEL_INSTANCE))
+                g_zone_models.fetch_add(1, RELAXED);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void zone_hook(void *sys, void *zone)
+{
+    if (pre_start_showing())
+        paint_panel(reinterpret_cast<uintptr_t>(sys), reinterpret_cast<uintptr_t>(zone));
+    g_zone_orig(sys, zone);
 }
 
 uintptr_t enter_hook(void *self, void *b, void *c, void *d)
@@ -624,6 +713,74 @@ void powertrain_hook(void *pt)
 // ------------------------------------------------------------------------------------------------
 // Frame
 
+// ------------------------------------------------------------------------------------------------
+// The game's own HUD (SwoftyCoreHud). Both calls queue; the core applies them on the game's flow thread.
+
+constexpr char LAP_TEXT[] = "ui_menu_data.hud_lap_description_string";    // shown while the lap number is hidden
+constexpr char LAP_LOC_TAG[] = "ui_menu_data.hud_lap_description_loc_tag"; // false: the text is literal, not a lng_* key
+constexpr char LAP_NUMBER[] = "ui_menu_data.hud_lap_number_visible";
+constexpr char LAP_TOTAL[] = "ui_menu_data.hud_total_lap_count_visible";
+constexpr double LAP_ROW_EVERY_S = 0.5; // the game may write these leaves itself, so they are written again
+constexpr char MSG_LOW[] = "LOW-OUTPUT START";
+constexpr char MSG_LOW_SUB[] = "MGU-K assist up to 50 km/h";
+constexpr char MSG_AHEAD[] = "SLOW CAR AHEAD";
+constexpr char MSG_AHEAD_SUB[] = "The car ahead is low on power";
+
+int hud_bool(const char *path, bool v)
+{
+    const int32_t i = v ? 1 : 0;
+    return g_hud->set(path, SWOFTY_HUD_BOOL, &i);
+}
+
+// pre: the lap counter shows PRE-START. Otherwise it gets the lap number back, if this mod took it.
+void lap_row(bool pre)
+{
+    if (!g_hud)
+        return;
+    if (pre && g_hud_ok.load(RELAXED) && !g_lap_refused.load(RELAXED)) {
+        double now = now_s();
+        if (g_lap_row && now - g_lap_row_at < LAP_ROW_EVERY_S)
+            return;
+        g_lap_row_at = now;
+        bool first = !g_lap_row;
+        g_lap_row = true; // from here on it is put back, whichever writes were taken
+        const int r[] = {g_hud->set(LAP_TEXT, SWOFTY_HUD_TEXT, "PRE-START"), hud_bool(LAP_LOC_TAG, false), hud_bool(LAP_TOTAL, false),
+                         hud_bool(LAP_NUMBER, false)};
+        for (int x : r)
+            if (x != SWOFTY_ASSET_OK) {
+                g_lap_refused = true;
+                glog("lap counter: the game HUD refused a write (result %d); PRE-START shows on the overlay", x);
+                return;
+            }
+        if (first)
+            glog("lap counter shows PRE-START");
+        return;
+    }
+    if (!g_lap_row)
+        return;
+    g_lap_row = false;
+    hud_bool(LAP_NUMBER, true);
+    hud_bool(LAP_TOTAL, true);
+    hud_bool(LAP_LOC_TAG, true);
+    glog("lap counter back to the lap number");
+}
+
+// The game's message box, the one that shows DRS ENABLED. False when the overlay has to show the message instead.
+bool game_message(const char *text, const char *detail)
+{
+    if (!g_hud || !g_hud_ok.load(RELAXED)) {
+        glog("game message %s: no game HUD, the overlay shows it", text);
+        return false;
+    }
+    int r = g_hud->toast(text, detail, NET_FLASH_S, "");
+    if (r != SWOFTY_ASSET_OK) {
+        glog("game message %s refused (result %d), the overlay shows it", text, r);
+        return false;
+    }
+    glog("game message %s queued", text);
+    return true;
+}
+
 void reset_live()
 {
     for (auto &l : g_live) {
@@ -656,7 +813,9 @@ void end_run(const char *why)
     g_state = 0;
     g_player_flag = false;
     g_ahead_flag = false;
+    g_overlay_msg = 0;
     g_frozen = false;
+    lap_row(false);
     if (launched)
         glog("launch power restored on all cars (%s)", why);
     else
@@ -686,6 +845,18 @@ void start_run(uintptr_t st)
     g_player_boost = 0;
     g_data_logged = false;
     g_frozen = false;
+    g_zone_updates = 0;
+    g_zone_ticks = 0;
+    g_zone_shaders = 0;
+    g_zone_models = 0;
+    g_zone_blue = 0;
+    g_zone_first = 0;
+    g_lap_refused = false;
+    g_told_player = false;
+    g_told_ahead = false;
+    g_low_overlay = false;
+    g_ahead_overlay = false;
+    g_hud_ok = g_hud && g_hud->available(); // before the phase: the overlay reads it as soon as Pre-Start shows
     float delay = g_pending_delay;
     bool pre = g_pending_pre;
     g_delay_left = delay + (pre ? float(gs::PRE_START_S) : 0.f);
@@ -872,7 +1043,7 @@ void launch_frame(float dt, const gs::Tuning &t)
         }
     }
     flush_layers();
-    // F1 25 has no known call for the rear and lateral lights, so a flagged car ahead shows on the overlay instead.
+    // F1 25 has no known call for the rear and lateral lights, so a flagged car ahead shows as a message instead.
     bool ahead = false;
     if (have_me && me_speed > 2.f)
         for (uint32_t i = 0; i < MAX_CARS; i++) {
@@ -883,8 +1054,19 @@ void launch_frame(float dt, const gs::Tuning &t)
             if (dx * dx + dz * dz < WARN_RANGE_M * WARN_RANGE_M && dx * me_vx + dz * me_vz > 0.f)
                 ahead = true;
         }
+    bool mine = g_player >= 0 && g_run[g_player].flagged && since <= g_run[g_player].flag_until;
     g_ahead_flag = ahead;
-    g_player_flag = g_player >= 0 && g_run[g_player].flagged && since <= g_run[g_player].flag_until;
+    g_player_flag = mine;
+    // Each message once per run, for NET_FLASH_S. The game's box shows one message after the other, so the player's own
+    // comes first: SLOW CAR AHEAD waits for the player's own check, and is left out after LOW-OUTPUT START.
+    if (mine && !g_told_player) {
+        g_told_player = true;
+        g_low_overlay = !game_message(MSG_LOW, MSG_LOW_SUB);
+    } else if (ahead && !g_told_player && !g_told_ahead && g_run[g_player].checked) {
+        g_told_ahead = true;
+        g_ahead_overlay = !game_message(MSG_AHEAD, MSG_AHEAD_SUB);
+    }
+    g_overlay_msg = mine && g_low_overlay ? 1 : ahead && g_ahead_overlay && !g_told_player ? 2 : 0;
     if (g_player >= 0)
         g_player_boost = g_run[g_player].boost;
     if (all_done) {
@@ -928,8 +1110,12 @@ void wait_frame(float sim_dt, double frame_dt, const gs::Tuning &t)
     if (g_phase.load() == P_PRE && (lights != 0 || delay <= 0.f)) {
         float peak = g_player >= 0 ? g_live[g_player].peak_rad_s.load() / RAD_S_PER_RPM : 0.f;
         glog("Pre-Start over after %.2f s (lights state %u); player boost %.0f%%, peak %.0f rpm", g_wait_s, lights, g_player_boost.load() * 100.f, peak);
+        glog("Pre-Start panels: %u zone updates in %u ticks, %u with shaders on, %u with a panel model, %u blue; session state 0x%x", g_zone_updates.load(),
+             g_zone_ticks.load(), g_zone_shaders.load(), g_zone_models.load(), g_zone_blue.load(), session_state);
         g_phase = P_LIGHTS;
     }
+    // The FIA phase only, the last 5 s. A pause leaves the text where it is: the pause menu hides the HUD.
+    lap_row(g_phase.load() == P_PRE && delay <= float(gs::PRE_START_S) + 0.05f);
     if (g_phase.load() == P_LIGHTS && lights >= 3) {
         begin_launch(t);
         return;
@@ -950,6 +1136,7 @@ void frame_impl(double dt)
     int ph = g_phase.load();
     if (ph == P_NONE)
         return;
+    g_hud_ok = g_hud && g_hud->available();
     double sim = 0;
     for (const auto &l : g_live) {
         double s = l.sim_s.load(RELAXED);
@@ -1000,21 +1187,187 @@ void frame_cb(double dt, void *)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Overlay
+// Overlay: what the game has no HUD element for, in the game's own shapes and colours. The places are measured on the
+// game's HUD at 1920 x 1080 and its default HUD scale. The game fits that layout to the screen and centres it, and so
+// does this. An overlay older than v2 gets squares for circles and no clip, gradient or text style.
 
-void text_c(SwoftyPaint *p, float cx, float y, float size, uint32_t rgba, const char *s)
+constexpr float LIGHT_Y = 338.f, LIGHT_GAP = 82.f, LIGHT_R = 32.f;                        // the game's five start lights
+constexpr float GAUGE_Y = 788.f, GAUGE_W = 300.f, GAUGE_H = 63.f, GAUGE_HEAD = 19.f; // above the dash
+constexpr int GAUGE_SEGS = 14;
+constexpr float MSG_Y = 150.f, MSG_W = 452.f, MSG_H = 68.f; // where the game's message box shows
+constexpr uint32_t LED_GLOW = 0x2E74FF00, BLUE = 0x3F7CFFFF, LIME = 0xC9E33FFF, GREEN = 0x2FD06CFF, AMBER = 0xF5B400FF;
+constexpr uint32_t WHITE = 0xFFFFFFFF, INK = 0x14161CFF;
+
+uint32_t alpha(uint32_t rgba, uint32_t a) { return (rgba & 0xFFFFFF00u) | (a & 0xFFu); }
+
+bool v2() { return g_ov_ver >= 2; }
+
+void disc(SwoftyPaint *p, float cx, float cy, float r, uint32_t rgba)
 {
-    float w = 0, h = 0;
-    g_ov->measure(p, size, s, &w, &h);
-    g_ov->text(p, cx - w / 2.f, y, size, rgba, s);
+    if (v2() && g_ov->circle)
+        g_ov->circle(p, cx, cy, r, rgba);
+    else
+        g_ov->rect(p, cx - r, cy - r, 2.f * r, 2.f * r, rgba);
 }
 
-void box(SwoftyPaint *p, float x, float y, float w, float h, float r, uint32_t rgba)
+void panel(SwoftyPaint *p, float x, float y, float w, float h, float r, uint32_t rgba)
 {
-    if (g_ov_ver >= 2 && g_ov->rect_rounded)
+    if (v2() && g_ov->rect_rounded)
         g_ov->rect_rounded(p, x, y, w, h, r, rgba);
     else
         g_ov->rect(p, x, y, w, h, rgba);
+}
+
+void rim(SwoftyPaint *p, float x, float y, float w, float h, float r, float t, uint32_t rgba)
+{
+    if (v2() && g_ov->rect_rounded_outline)
+        g_ov->rect_rounded_outline(p, x, y, w, h, r, t, rgba);
+    else if (g_ov->rect_outline)
+        g_ov->rect_outline(p, x, y, w, h, t, rgba);
+}
+
+// Clear at the top, rgba at the bottom: the coloured glow along a panel's bottom edge.
+void glow_up(SwoftyPaint *p, float x, float y, float w, float h, float r, uint32_t rgba)
+{
+    if (v2() && g_ov->rect_gradient)
+        g_ov->rect_gradient(p, x, y, w, h, r, alpha(rgba, 0), rgba, SWOFTY_GRADIENT_VERTICAL);
+}
+
+bool clip(SwoftyPaint *p, float x, float y, float w, float h)
+{
+    if (!v2() || !g_ov->push_clip || !g_ov->pop_clip)
+        return false;
+    g_ov->push_clip(p, x, y, w, h);
+    return true;
+}
+
+// The part of a rounded panel inside the clip box: its header cell, its icon cell or its bottom edge.
+void panel_part(SwoftyPaint *p, float x, float y, float w, float h, float r, float cx, float cy, float cw, float ch, uint32_t rgba)
+{
+    if (clip(p, cx, cy, cw, ch)) {
+        panel(p, x, y, w, h, r, rgba);
+        g_ov->pop_clip(p);
+    } else {
+        g_ov->rect(p, cx, cy, cw, ch, rgba);
+    }
+}
+
+// Text centred on y, and aligned on x by align (SWOFTY_TEXT_LEFT, CENTER or RIGHT).
+void label(SwoftyPaint *p, float x, float y, float px, uint32_t rgba, uint32_t align, float tracking, const char *s)
+{
+    if (v2() && g_ov->text_styled) {
+        SwoftyTextStyle st{};
+        st.size = sizeof st;
+        st.align = align | SWOFTY_TEXT_MIDDLE;
+        st.px = px;
+        st.rgba = rgba;
+        st.tracking = tracking;
+        g_ov->text_styled(p, x, y, &st, s);
+        return;
+    }
+    float w = 0, h = 0;
+    g_ov->measure(p, px, s, &w, &h);
+    float left = align == SWOFTY_TEXT_CENTER ? x - w / 2.f : align == SWOFTY_TEXT_RIGHT ? x - w : x;
+    g_ov->text(p, left, y - h / 2.f, px, rgba, s);
+}
+
+// One of the game's start lights in blue: a dark rim, a face of LED dots and, when lit, a glow.
+void start_light(SwoftyPaint *p, float cx, float cy, float r, bool lit)
+{
+    float u = r / LIGHT_R;
+    if (lit) {
+        static const uint32_t glow[] = {0x10, 0x18, 0x22, 0x30, 0x48, 0x70};
+        for (int i = 0; i < 6; i++)
+            disc(p, cx, cy, r + (14.f - 2.4f * float(i)) * u, alpha(LED_GLOW, glow[i]));
+    }
+    disc(p, cx, cy, r, 0x1D2027FF);
+    disc(p, cx, cy, r * 0.95f, 0x30343CFF);
+    disc(p, cx, cy, r * 0.88f, 0x191D25FF);
+    if (lit) {
+        disc(p, cx, cy, r * 0.85f, 0x163A9EFF);
+        disc(p, cx, cy, r * 0.80f, 0x1D48C4FF);
+        disc(p, cx, cy, r * 0.68f, 0x2B62EAFF);
+        disc(p, cx, cy, r * 0.48f, BLUE);
+        disc(p, cx, cy, r * 0.25f, 0x6AA2FFCC);
+    } else {
+        disc(p, cx, cy, r * 0.85f, 0x131A28FF);
+        disc(p, cx, cy, r * 0.70f, 0x182030FF);
+        disc(p, cx, cy, r * 0.45f, 0x1E2738FF);
+    }
+    // The dots, on a hexagonal grid
+    float sx = 7.4f * u, hy = 3.2f * u, dot = 1.7f * u, reach = r * 0.7f;
+    uint32_t c = lit ? 0xBEDAFFCC : 0xBEDAFF29;
+    int rows = int(reach / hy), cols = int(reach / sx) + 1;
+    for (int j = -rows; j <= rows; j++) {
+        float y = float(j) * hy, shift = (j & 1) ? sx / 2.f : 0.f;
+        for (int i = -cols; i <= cols; i++) {
+            float x = float(i) * sx + shift;
+            if (x * x + y * y <= reach * reach)
+                disc(p, cx + x, cy + y, dot, c);
+        }
+    }
+}
+
+// The turbo spool, as one of the game's timing panels: a header cell, 14 segments and the value.
+void spool_gauge(SwoftyPaint *p, float cx, float y, float k, float b)
+{
+    float w = GAUGE_W * k, h = GAUGE_H * k, x = cx - w / 2.f, r = 6.f * k, head = GAUGE_HEAD * k;
+    bool full = b >= 1.f;
+    uint32_t acc = full ? GREEN : LIME;
+    panel(p, x, y, w, h, r, 0x0C0F18ED);
+    panel_part(p, x, y, w, h, r, x, y, w, head, 0x3B3E45FF);
+    label(p, cx, y + head / 2.f, 12.f * k, 0xD4D7DDFF, SWOFTY_TEXT_CENTER, 1.8f * k, "TURBO SPOOL");
+    // 9 below the header, then a 22 high line of segments and value, 13 at the sides and below
+    float mid = y + head + 9.f * k + 11.f * k, gap = 3.f * k, seg_h = 13.f * k;
+    float segs_w = w - 26.f * k - 12.f * k - 52.f * k;
+    float seg_w = (segs_w - gap * float(GAUGE_SEGS - 1)) / float(GAUGE_SEGS);
+    int on = full ? GAUGE_SEGS : std::min(GAUGE_SEGS - 1, int(b * float(GAUGE_SEGS)));
+    for (int i = 0; i < GAUGE_SEGS; i++)
+        panel(p, x + 13.f * k + float(i) * (seg_w + gap), mid - seg_h / 2.f, seg_w, seg_h, 1.f * k, i < on ? acc : 0xFFFFFF21);
+    char value[8];
+    if (full)
+        snprintf(value, sizeof value, "FULL");
+    else
+        snprintf(value, sizeof value, "%d%%", std::min(99, int(b * 100.f)));
+    label(p, x + w - 13.f * k, mid, 22.f * k, WHITE, SWOFTY_TEXT_RIGHT, 0.f, value);
+    // The bottom edge in the gauge's colour, as the game's panels have it in the team's
+    glow_up(p, x, y + h - 15.f * k, w, 15.f * k, r, alpha(acc, 0x61));
+    panel_part(p, x, y, w, h, r, x, y + h - 2.f * k, w, 2.f * k, acc);
+    rim(p, x, y, w, h, r, 1.5f * k, 0xCDD2DC6B);
+}
+
+// The game's message box, drawn when the game HUD does not take the message.
+void message_box(SwoftyPaint *p, float cx, float y, float k, const char *main, const char *sub, uint32_t acc, bool lit)
+{
+    float w = MSG_W * k, h = MSG_H * k, x = cx - w / 2.f, r = 5.f * k, cell = MSG_H * k;
+    panel(p, x, y, w, h, r, 0x0F0E14F0);
+    panel_part(p, x, y, w, h, r, x, y, cell, h, 0x1C1F27FF);
+    float ix = x + cell / 2.f, iy = y + h / 2.f, u = 34.f * k / 24.f; // the icon: 34 px of a 24 unit drawing
+    if (acc == AMBER) {
+        const float tri[] = {ix, iy - 9.2f * u, ix + 10.4f * u, iy + 9.f * u, ix - 10.4f * u, iy + 9.f * u};
+        if (v2() && g_ov->polygon)
+            g_ov->polygon(p, tri, 3, AMBER);
+        else
+            g_ov->rect(p, ix - 10.4f * u, iy - 9.2f * u, 20.8f * u, 18.2f * u, AMBER);
+        if (g_ov->line)
+            g_ov->line(p, ix, iy - 2.8f * u, ix, iy + 2.8f * u, 2.6f * u, INK);
+        disc(p, ix, iy - 2.8f * u, 1.3f * u, INK);
+        disc(p, ix, iy + 2.8f * u, 1.3f * u, INK);
+        disc(p, ix, iy + 5.8f * u, 1.4f * u, INK);
+    } else {
+        start_light(p, ix, iy, 17.f * k, lit);
+    }
+    float tx = x + cell + 16.f * k, main_h = 23.f * 1.12f * k, sub_h = 15.f * 1.3f * k;
+    if (sub) {
+        float top = y + (h - main_h - sub_h) / 2.f;
+        label(p, tx, top + main_h / 2.f, 23.f * k, WHITE, SWOFTY_TEXT_LEFT, 0.4f * k, main);
+        label(p, tx, top + main_h + sub_h / 2.f, 15.f * k, 0xB9BDC7FF, SWOFTY_TEXT_LEFT, 0.f, sub);
+    } else {
+        label(p, tx, y + h / 2.f, 23.f * k, WHITE, SWOFTY_TEXT_LEFT, 0.4f * k, main);
+    }
+    glow_up(p, x, y + h - 14.f * k, w, 14.f * k, r, alpha(acc, 0x4D));
+    panel_part(p, x, y, w, h, r, x, y + h - 2.5f * k, w, 2.5f * k, acc);
+    rim(p, x, y, w, h, r, 1.5f * k, 0xCDD2DC4D);
 }
 
 void paint_impl(SwoftyPaint *p)
@@ -1024,40 +1377,24 @@ void paint_impl(SwoftyPaint *p)
         return;
     float W = 0, H = 0;
     g_ov->size(p, &W, &H);
-    float k = H / 1080.f;
-    bool on = std::fmod(now_s(), 0.5) < 0.25; // 2 Hz
-    float cx = W / 2.f;
-    constexpr uint32_t BLUE = 0x1E6BFFFF, DARK = 0x0A0F1CE6, WHITE = 0xFFFFFFFF, AMBER = 0xFFB000FF;
-    // The game's own delay, if it has one, runs first: the FIA phase is its last 5 s.
-    if (ph == P_PRE && g_delay_left.load(RELAXED) <= float(gs::PRE_START_S) + 0.05f) {
-        // The Grid Light Panels and the gantry message (B5.7.2 b).
-        if (on) {
-            box(p, 40 * k, H * 0.30f, 46 * k, H * 0.40f, 8 * k, BLUE);
-            box(p, W - 86 * k, H * 0.30f, 46 * k, H * 0.40f, 8 * k, BLUE);
-        }
-        box(p, cx - 170 * k, 110 * k, 340 * k, 74 * k, 10 * k, DARK);
-        text_c(p, cx, 124 * k, 42 * k, on ? BLUE : WHITE, "PRE-START");
+    if (W < 1.f || H < 1.f)
+        return;
+    float k = std::min(W / 1920.f, H / 1080.f), cx = W / 2.f, oy = (H - 1080.f * k) / 2.f;
+    bool on = flash_on();
+    if (pre_start_showing()) {
+        // The Grid Light Panels, flashing blue (B5.7.2 b), where the game's red lights come on
+        for (int i = -2; i <= 2; i++)
+            start_light(p, cx + float(i) * LIGHT_GAP * k, oy + LIGHT_Y * k, LIGHT_R * k, on);
+        if (!g_hud_ok.load(RELAXED) || g_lap_refused.load(RELAXED))
+            message_box(p, cx, oy + MSG_Y * k, k, "PRE-START", nullptr, BLUE, on);
     }
-    if ((ph == P_PRE || ph == P_LIGHTS) && s_launch.load(RELAXED) && g_player >= 0) {
-        // Low on the screen: the game's start lights stay clear.
-        float b = gs::clamp01(g_player_boost.load(RELAXED));
-        float bx = cx - 150 * k, by = H * 0.72f, bw = 300 * k, bh = 12 * k;
-        box(p, bx - 6 * k, by - 30 * k, bw + 12 * k, 54 * k, 8 * k, DARK);
-        text_c(p, cx, by - 27 * k, 20 * k, WHITE, "TURBO SPOOL");
-        g_ov->rect(p, bx, by, bw, bh, 0x2A3040FF);
-        g_ov->rect(p, bx, by, bw * b, bh, b >= 1.f ? 0x2BD46BFF : BLUE);
-    }
-    if (ph == P_LAUNCH && on) {
-        if (g_player_flag.load(RELAXED)) {
-            box(p, cx - 250 * k, 110 * k, 500 * k, 64 * k, 10 * k, DARK);
-            text_c(p, cx, 124 * k, 32 * k, AMBER, "LOW-OUTPUT START");
-        } else if (g_ahead_flag.load(RELAXED)) {
-            box(p, cx - 250 * k, 110 * k, 500 * k, 64 * k, 10 * k, DARK);
-            text_c(p, cx, 124 * k, 32 * k, AMBER, "SLOW CAR AHEAD");
-            box(p, 40 * k, H * 0.40f, 30 * k, H * 0.20f, 6 * k, AMBER);
-            box(p, W - 70 * k, H * 0.40f, 30 * k, H * 0.20f, 6 * k, AMBER);
-        }
-    }
+    if ((ph == P_PRE || ph == P_LIGHTS) && s_launch.load(RELAXED) && g_player >= 0)
+        spool_gauge(p, cx, oy + GAUGE_Y * k, k, gs::clamp01(g_player_boost.load(RELAXED)));
+    int msg = ph == P_LAUNCH ? g_overlay_msg.load(RELAXED) : 0;
+    if (msg == 1)
+        message_box(p, cx, oy + MSG_Y * k, k, MSG_LOW, MSG_LOW_SUB, AMBER, true);
+    else if (msg == 2)
+        message_box(p, cx, oy + MSG_Y * k, k, MSG_AHEAD, MSG_AHEAD_SUB, AMBER, true);
 }
 
 void paint_cb(SwoftyPaint *p, void *)
@@ -1074,8 +1411,10 @@ void paint_cb(SwoftyPaint *p, void *)
 void on_event(const SwoftyEvent *ev, void *)
 {
     // A restart from the results screen has neither event, and keeps the session's arming with it.
-    if (!strcmp(ev->name, SWOFTY_EVENT_SESSION_UNLOAD))
-        g_armed = false;
+    if (!strcmp(ev->name, SWOFTY_EVENT_SESSION_UNLOAD)) {
+        g_offline = false;
+        g_race_label = false;
+    }
     g_end_request = "session over";
 }
 
@@ -1088,11 +1427,13 @@ int on_session_hook(void *, SwoftyHookCall *call)
     int mr = g_hooks->context(call->context, "mode", mode, sizeof mode - 1, &l);
     int sr = g_hooks->context(call->context, "session", sess, sizeof sess - 1, &l);
     // The core reports every online mode and every mode it does not know as "unknown", so this list is the online
-    // check too: the lights must stay in sync with the host there. The race types are the two B5.7.2 applies to.
+    // check too: the lights must stay in sync with the host there. The race types are the two B5.7.2 applies to. The
+    // session label is only a fallback: it stays at the weekend's first session, so the lights read the game's own type.
     bool offline = mr == SWOFTY_ASSET_OK && (strstr(mode, "\"grand_prix\"") || strstr(mode, "\"driver_career\"") || strstr(mode, "\"my_team\""));
     bool race = sr == SWOFTY_ASSET_OK && (strstr(sess, "\"type\":\"race\"") || strstr(sess, "\"type\":\"sprint\""));
-    g_armed = offline && race;
-    glog("session.start: mode %s, session %s -> %s", mode, sess, g_armed.load() ? "armed, the lights check the cars" : "mod idle in this session");
+    g_offline = offline;
+    g_race_label = race;
+    glog("session.start: mode %s, session %s -> %s", mode, sess, offline ? "offline mode, the lights check the session type and the cars" : "mod idle in this session");
     return 0;
 }
 
@@ -1143,11 +1484,15 @@ int init_impl(const SwoftyApi *api)
     if (HMODULE core = GetModuleHandleW(L"swofty_core.dll"))
         if (auto vf = reinterpret_cast<uint32_t (*)()>(GetProcAddress(core, "SwoftyCoreOverlayVersion")))
             g_ov_ver = vf();
+    g_hud = core_table<SwoftyHud>("SwoftyCoreHud");
+    if (g_hud && (g_hud->version < 1 || !g_hud->available || !g_hud->toast || !g_hud->set))
+        g_hud = nullptr;
     g_hooks = api->hooks;
 
     const SwoftyMixin mix[] = {
         {"Sess_StartLights_Enter", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&enter_hook), reinterpret_cast<void **>(&g_enter_orig)},
         {"Car_Powertrain_Step", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&powertrain_hook), reinterpret_cast<void **>(&g_powertrain_orig)},
+        {"Sess_MarshalLights_UpdateZoneShader", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&zone_hook), reinterpret_cast<void **>(&g_zone_orig)},
     };
     int mr = api->register_mixins(mix, sizeof mix / sizeof mix[0]);
 
@@ -1160,8 +1505,8 @@ int init_impl(const SwoftyApi *api)
         er = ev->on_frame(frame_cb, nullptr, &tok);
     }
     int hr = g_hooks && g_hooks->attach ? g_hooks->attach("session.start", SWOFTY_PHASE_AFTER, 0, on_session_hook, nullptr, &tok) : -1;
-    glog("%s ready: build check ok, mixins %d, on_frame %d, session hook %d, car ops %s, power field %u, layer thread %s, overlay v%u",
-         GS_VERSION, mr, er, hr, g_cars ? "yes" : "no", g_power_field, g_layer_event ? "yes" : "no", g_ov_ver);
+    glog("%s ready: build check ok, mixins %d, on_frame %d, session hook %d, car ops %s, power field %u, layer thread %s, overlay v%u, game HUD %s",
+         GS_VERSION, mr, er, hr, g_cars ? "yes" : "no", g_power_field, g_layer_event ? "yes" : "no", g_ov_ver, g_hud ? "yes" : "no");
     return 1;
 }
 
