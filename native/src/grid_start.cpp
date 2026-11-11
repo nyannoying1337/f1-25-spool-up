@@ -52,7 +52,7 @@
 
 namespace {
 
-constexpr char GS_VERSION[] = "0.2.2";
+constexpr char GS_VERSION[] = "0.3.0";
 
 // Offsets, build d873a1c8d2044cef. CODE_CHECKS below turns the whole mod off on any other exe.
 constexpr uintptr_t ST_SESSION = 0xc98;    // session: +0x1e8 state, +0x1a8 descriptor
@@ -465,14 +465,18 @@ void on_enter(uintptr_t st, uint8_t once)
         return;
     }
     // The update starts a sequence only from these two states: otherwise this is a start resuming, or lights already over.
-    if (lights != 0 && mode != SL_MODE_FORMATION)
+    if (lights != 0 && mode != SL_MODE_FORMATION) {
+        glog("StartLights enter: no new start (lights state %u, mode %u)", lights, mode);
         return;
+    }
     // The game sets the delay once per state object. A later enter on the same object is a new start only when no run
     // waits for the lights and no countdown is left (a race restart).
     int ph = g_phase.load();
     bool waiting = g_pending_st.load() != 0 || ph == P_PRE || ph == P_LIGHTS;
-    if (once != 0 && (delay > 0.f || waiting))
+    if (once != 0 && (delay > 0.f || waiting)) {
+        glog("StartLights enter: no new start (same lights object, delay %.2f s, phase %d, pending %d)", delay, ph, g_pending_st.load() != 0);
         return;
+    }
 
     GridRead grid = read_grid();
     glog("StartLights enter: %u cars, %u F1 2026, %u others with an ERS (handling version %u, max deploy %.0f W)", grid.cars, grid.f1_2026, grid.other, grid.handling, grid.deploy);
@@ -763,6 +767,89 @@ void lap_row(bool pre)
     hud_bool(LAP_TOTAL, true);
     hud_bool(LAP_LOC_TAG, true);
     glog("lap counter back to the lap number");
+}
+
+// The Pre-Start lights and the spool gauge, drawn by the game itself: the group spool_prestart that this addon's
+// archive adds beside the game's start lights (race_main.idf and race.ui, tools/native_hud/build.py). Each part shows
+// while its view_model_data.hud_spool_* leaf is true (the core takes only view_model_data.hud* leaves). All of them are
+// written false once as soon as the game HUD is there, so the gauge stays hidden until the first start. Only changed leaves are written, and all of them again every
+// NATIVE_REFRESH_S while anything shows, because the game can rebuild its view model. When the game HUD refuses a
+// write, the overlay draws the lights and the gauge instead, as before.
+constexpr int NATIVE_SLATS = 14;
+constexpr double NATIVE_REFRESH_S = 2.0;
+enum NativeLeaf { NL_ON, NL_LAMPS, NL_LIT, NL_GAUGE, NL_FULL, NL_SLAT1, NL_COUNT = NL_SLAT1 + NATIVE_SLATS };
+const char *native_path(int i)
+{
+    static char paths[NL_COUNT][40];
+    static bool made = false;
+    if (!made) {
+        const char *named[] = {"on", "lamps", "lit", "gauge", "full"};
+        for (int k = 0; k < NL_COUNT; k++)
+            if (k < NL_SLAT1)
+                snprintf(paths[k], sizeof paths[k], "view_model_data.hud_spool_%s", named[k]);
+            else
+                snprintf(paths[k], sizeof paths[k], "view_model_data.hud_spool_s%02d", k - NL_SLAT1 + 1);
+        made = true;
+    }
+    return paths[i];
+}
+bool g_native_sent[NL_COUNT], g_native_known[NL_COUNT];
+double g_native_refresh_at;
+std::atomic<bool> g_native_refused{false}; // the game HUD refused a write this game run: the overlay draws them
+bool g_native_logged;
+
+bool native_ok() { return g_hud && g_hud_ok.load(RELAXED) && !g_native_refused.load(RELAXED); }
+
+// Lit slats out of NATIVE_SLATS for boost b (0..1): all of them only when full, as the overlay's gauge.
+int spool_slats(float b) { return b >= 1.f ? NATIVE_SLATS : std::min(NATIVE_SLATS - 1, std::max(0, int(b * float(NATIVE_SLATS)))); }
+
+void native_hud()
+{
+    if (!g_hud || g_native_refused.load(RELAXED))
+        return;
+    int ph = g_phase.load(RELAXED);
+    bool frozen = g_frozen.load(RELAXED);
+    bool lamps = pre_start_showing();
+    bool gauge = !frozen && (ph == P_PRE || ph == P_LIGHTS) && s_launch.load(RELAXED) && g_player >= 0;
+    float b = gs::clamp01(g_player_boost.load(RELAXED));
+    bool full = gauge && b >= 1.f;
+    int lit = gauge && !full ? spool_slats(b) : 0;
+    bool want[NL_COUNT];
+    want[NL_ON] = lamps || gauge;
+    want[NL_LAMPS] = lamps;
+    want[NL_LIT] = lamps && flash_on();
+    want[NL_GAUGE] = gauge;
+    want[NL_FULL] = full;
+    for (int k = 0; k < NATIVE_SLATS; k++)
+        want[NL_SLAT1 + k] = k < lit;
+    bool shown = false; // anything this mod showed that the game still shows
+    for (int k = 0; k < NL_COUNT; k++)
+        shown = shown || (g_native_known[k] && g_native_sent[k]);
+    bool first = !g_native_known[NL_ON]; // nothing written yet in this game run: hide them all once
+    if (!want[NL_ON] && !shown && !first)
+        return; // nothing to show or take down: no writes outside a start
+    if (!g_hud->available())
+        return; // no game HUD now: the overlay draws them (paint_impl checks native_ok)
+    double now = now_s();
+    bool refresh = want[NL_ON] && now >= g_native_refresh_at;
+    if (refresh)
+        g_native_refresh_at = now + NATIVE_REFRESH_S;
+    for (int k = 0; k < NL_COUNT; k++) {
+        if (!refresh && g_native_known[k] && g_native_sent[k] == want[k])
+            continue;
+        int r = hud_bool(native_path(k), want[k]);
+        if (r != SWOFTY_ASSET_OK) {
+            g_native_refused = true;
+            glog("game HUD lights and gauge: %s refused (result %d); the overlay draws them for this game run", native_path(k), r);
+            return;
+        }
+        g_native_sent[k] = want[k];
+        g_native_known[k] = true;
+    }
+    if (want[NL_ON] && !g_native_logged) {
+        g_native_logged = true;
+        glog("game HUD lights and gauge: on (%d leaves)", int(NL_COUNT));
+    }
 }
 
 // The game's message box, the one that shows DRS ENABLED. False when the overlay has to show the message instead.
@@ -1179,6 +1266,7 @@ void frame_cb(double dt, void *)
 {
     __try {
         frame_impl(dt);
+        native_hud();
         try_overlay();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         glog("a frame faulted; the run is cancelled");
@@ -1381,14 +1469,16 @@ void paint_impl(SwoftyPaint *p)
         return;
     float k = std::min(W / 1920.f, H / 1080.f), cx = W / 2.f, oy = (H - 1080.f * k) / 2.f;
     bool on = flash_on();
+    bool game_draws = native_ok(); // the game draws the lights and the gauge itself (native_hud)
     if (pre_start_showing()) {
         // The Grid Light Panels, flashing blue (B5.7.2 b), where the game's red lights come on
-        for (int i = -2; i <= 2; i++)
-            start_light(p, cx + float(i) * LIGHT_GAP * k, oy + LIGHT_Y * k, LIGHT_R * k, on);
+        if (!game_draws)
+            for (int i = -2; i <= 2; i++)
+                start_light(p, cx + float(i) * LIGHT_GAP * k, oy + LIGHT_Y * k, LIGHT_R * k, on);
         if (!g_hud_ok.load(RELAXED) || g_lap_refused.load(RELAXED))
             message_box(p, cx, oy + MSG_Y * k, k, "PRE-START", nullptr, BLUE, on);
     }
-    if ((ph == P_PRE || ph == P_LIGHTS) && s_launch.load(RELAXED) && g_player >= 0)
+    if (!game_draws && (ph == P_PRE || ph == P_LIGHTS) && s_launch.load(RELAXED) && g_player >= 0)
         spool_gauge(p, cx, oy + GAUGE_Y * k, k, gs::clamp01(g_player_boost.load(RELAXED)));
     int msg = ph == P_LAUNCH ? g_overlay_msg.load(RELAXED) : 0;
     if (msg == 1)

@@ -10,8 +10,8 @@ The real 2026 cars have no MGU-H, so nothing keeps the turbo spinning on the gri
 
 ## What you get
 
-- **Pre-Start.** For 5 s before the first red light the light panels along the track flash blue, five blue lights flash on your screen where the game's red lights come on, and the game's lap counter says PRE-START. Then the game's own five lights. Also after a formation lap and at a standing restart.
-- **Turbo spool.** A TURBO SPOOL gauge just above the dash, in the style of the game's HUD. Hold 10,000 rpm or more and it fills in 3 s, then turns green and says FULL. Drop below that while you wait and it falls again. With an empty gauge the engine has about a third of its power when the lights go out.
+- **Pre-Start.** For 5 s before the first red light the light panels along the track flash blue, the five lamps of the game's own start lights on your HUD flash blue, and the game's lap counter says PRE-START. Then the game's own five lights. Also after a formation lap and at a standing restart.
+- **Turbo spool.** A TURBO SPOOL gauge under the start lights, drawn by the game's own HUD. Move it, resize it or turn it off in the game's HUD customisation, where it is called Turbo Spool. Hold 10,000 rpm or more and it fills in 3 s, then turns green and says FULL. Drop below that while you wait and it falls again. With an empty gauge the engine has about a third of its power when the lights go out.
 - **Low-output safety net.** A car on low boost that accelerates abnormally slowly gets just enough MGU-K from its own battery to hold a minimum acceleration until 50 km/h. The game's own message box shows LOW-OUTPUT START, or SLOW CAR AHEAD when it is an AI car in front of you. The net turns a disastrous start into a bad one, never a good one.
 - **AI that can get it wrong.** Each AI car gets a random start: most are clean, some poor, about 1 in 20 fumbled. A fumbled car bogs for 1.5 s, so gaps open up on the grid.
 - **No MGU-K off the line.** The game's 2026 car data already has no deployment below 50 km/h, as in the rules. Spool Up keeps it that way for every car the net does not help.
@@ -38,7 +38,7 @@ Time from lights out to 50 km/h, measured in the game with the default settings 
 
 - F1 25 on Steam, build 25251167. The EA app version is not supported. After a game update Spool Up stays idle and the game runs as normal, until a new version is out.
 - The official 2026 Season Pack, for the F1 2026 cars.
-- Swofty Launcher 1.8.36 or newer.
+- Swofty Launcher 1.8.38 or newer.
 - Offline Grand Prix, Driver Career or My Team, races and sprints.
 
 Other cars keep the game's normal start. Spool Up reads every car at the lights, and a grid with any non-2026 ERS car stays standard.
@@ -58,16 +58,16 @@ In ADDON SETTINGS on the home menu (directly under Career, or F9 / R3), or in th
 
 ## Beta status
 
-- Raced so far: Driver Career races at Shanghai and Suzuka, with the default settings. Grand Prix, My Team and sprints run the same code.
+- Raced so far: Driver Career races at Shanghai and Suzuka and a two-round Grand Prix, with the default settings. My Team and sprints run the same code.
 - **Custom settings are untested** in a real race.
 - Not tried in a real race yet either: a start after a driven formation lap, a grid of non-2026 cars and the warnings in the game's message box.
 - The trackside panels flash blue in the game's log, but nobody has seen them on screen yet.
 
 ## Good to know
 
-- The start lights on the gantry stay the game's own: they have no blue lamps. How many blue panels you can see from your grid slot depends on the track, and the blue lights on your screen show at every track. The warnings are messages on your HUD, not lights on the cars.
-- PRE-START and the warnings are drawn by the game's own HUD, so they follow its layout and scale. The blue lights and the spool gauge are placed for the default HUD scale, so with another HUD scale they can sit a little off the game's own lights and dash. Without the game HUD, Spool Up draws the words itself.
-- With DLSS Frame Generation on, Swofty draws no overlay, so the blue lights and the spool gauge do not show. PRE-START and the warnings come from the game's own HUD and still show.
+- The start lights on the gantry stay the game's own: they have no blue lamps. How many blue panels you can see from your grid slot depends on the track, and the blue lamps on your HUD show at every track. The warnings are messages on your HUD, not lights on the cars.
+- The blue lamps, the spool gauge, PRE-START and the warnings are all drawn by the game's own HUD, so they follow its layout and scale. Only when the game's HUD is missing or refuses them does Spool Up draw them itself.
+- DLSS Frame Generation does not hide the blue lamps or the gauge, because the game draws them. Spool Up's own drawing, used only when the game's HUD refuses them, does not show with Frame Generation on.
 - Aborted starts and extra formation laps (FIA Articles B5.8 and B5.9) are not added.
 - AI starts are random. Driver skill does not change them.
 - The net's MGU-K is what the game's deploy code allows: none in ERS mode None, none with an empty battery.
@@ -99,22 +99,23 @@ The FIA has not published its trigger values, so these are my own tuning values:
 - `Sess_MarshalLights_UpdateZoneShader` (wrap, per panel, per tick): during Pre-Start it writes the game's own blue flag values, or its own off values on the flash's other half, just before the game sends them to the panel's shader. The game writes each panel again on its next tick, so nothing needs putting back.
 - `Car_Powertrain_Step` (wrap, per car, 360 Hz): reads engine speed, car speed, physics time and what the game deployed. For a car the safety net flagged, below 50 km/h, it makes that car's own deploy curve answer the share it needs for the length of the game's call, then puts the curve back. Everything past the curve is the game's own: the ERS mode's limit, the energy, the torque clamp, the throttle split and the brake and idle gates.
 - Engine power goes through `engine.power_scale` layers at priority 40, under Terminal Damage's fault scale (50) and engine kill (100).
-- The words go through the core's race HUD (`SwoftyCoreHud`): PRE-START into the lap counter's own leaves, written again every half second while it shows, and the warnings into the game's message box. The overlay draws the blue lights and the spool gauge.
+- The words go through the core's race HUD (`SwoftyCoreHud`): PRE-START into the lap counter's own leaves, written again every half second while it shows, and the warnings into the game's message box. The blue lamps and the gauge are game HUD parts: `erp` overlays add them to the race screen (`race_main.idf`, `race.ui`) and add a HUD element `spool_gauge` (template `hud_spool_gauge`, entry in `hud_layouts.uidl`), driven by 19 `view_model_data.hud_spool_*` leaves. `tools/native_hud/build.py` makes those archives from the game's own files. Swofty's overlay draws them only when the game HUD refuses a write.
 
 To check that it runs, look in the log (`swofty\loader.log` in your F1 25 folder, while the game runs) for:
 
 ```
-[gridstart] 0.2.2 ready: build check ok, ...
+[gridstart] 0.3.0 ready: build check ok, ...
 [gridstart] StartLights enter: 23 cars, 22 F1 2026, 0 others with an ERS (handling version 9, max deploy 350000 W)
 [gridstart] run started: game delay 0.00 s, Pre-Start +5.00 s, launch model on, safety net on, AI on, spool 3.0 s at 10000 rpm
 [gridstart] lap counter shows PRE-START
+[gridstart] game HUD lights and gauge: on (19 leaves)
 [gridstart] Pre-Start panels: U zone updates in T ticks, S with shaders on, M with a panel model, B blue; session state 0xN
 [gridstart] LIGHTS OUT after W s of waiting (...); C cars seen, player car N, boost B%, peak P rpm
 ```
 
 ## Build
 
-`.\package.ps1 -NoInstall` runs the tests, builds `native\grid_start_2026.dll` and writes the zip to `dist\` (VS 2022 C++ build tools). `native\build.cmd` runs the tests and builds only.
+`.\package.ps1 -NoInstall` runs the tests, builds `native\grid_start_2026.dll` and writes the zip to `dist\` (zig 0.17). `native\build.cmd` runs the tests and builds only.
 
 ## License
 

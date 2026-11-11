@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "ops": [
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/screens/race.erp",
+        "2025_asset_groups/ui_package/screens/race_splitscreen.erp",
+        "2025_asset_groups/ui_package/screens/race_transition.erp"
+      ],
+      "source": "erp/spool_hud.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp",
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/spool_gauge.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/flow_race.erp",
+        "2025_asset_groups/ui_package/flow_options.erp"
+      ],
+      "source": "erp/spool_template.erp"
+    },
+    {
+      "op": "overlay",
+      "erps": [
+        "2025_asset_groups/ui_package/persistent.erp"
+      ],
+      "source": "erp/spool_layout.erp"
+    }
+  ]
+}

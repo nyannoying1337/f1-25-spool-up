@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "ops": [
+    { "op": "lang.set", "language": "*", "key": "lng_hud_component_spool_gauge", "value": "Turbo Spool" }
+  ]
+}

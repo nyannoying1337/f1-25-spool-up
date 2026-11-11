@@ -20,6 +20,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stage
 New-Item -ItemType Directory -Force "$stage\native" | Out-Null
 Copy-Item "$PSScriptRoot\swofty.json", "$PSScriptRoot\README.md", "$PSScriptRoot\icon.png", "$PSScriptRoot\LICENSE" $stage
 Copy-Item "$PSScriptRoot\native\grid_start_2026.dll" "$stage\native"
+# The game-drawn Pre-Start lamps and the spool gauge's HUD element (tools\native_hud\build.py writes them), and the
+# gauge's name in the game's HUD editor
+New-Item -ItemType Directory -Force "$stage\erp", "$stage\assets" | Out-Null
+foreach ($f in "spool_hud.json", "spool_hud.erp", "spool_gauge.erp", "spool_template.erp", "spool_layout.erp") {
+    Copy-Item "$PSScriptRoot\erp\$f" "$stage\erp"
+}
+Copy-Item "$PSScriptRoot\assets\text.json" "$stage\assets"
 
 # swofty.json at the zip root and forward slashes, as the Swofty addon registry expects.
 $out = Join-Path $PSScriptRoot "dist\spool-up-$ver.zip"

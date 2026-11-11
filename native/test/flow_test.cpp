@@ -274,7 +274,7 @@ static std::vector<Light> lights_drawn()
     }
     return v;
 }
-static bool lights_on_screen() { return lights_drawn().size() == 5; }
+static bool overlay_lights() { return lights_drawn().size() == 5; }
 
 // The fake game HUD: leaves as text ("1" and "0" for a bool), and the messages.
 struct Toast {
@@ -283,7 +283,7 @@ struct Toast {
 };
 static std::vector<Toast> g_toasts;
 static std::map<std::string, std::string> g_leaves;
-static int g_leaf_writes, g_hud_up = 1, g_hud_set_result = SWOFTY_ASSET_OK, g_hud_toast_result = SWOFTY_ASSET_OK;
+static int g_leaf_writes, g_spool_writes, g_hud_up = 1, g_hud_set_result = SWOFTY_ASSET_OK, g_hud_toast_result = SWOFTY_ASSET_OK;
 static int hud_available() { return g_hud_up; }
 static int hud_toast(const char *text, const char *detail, float seconds, const char *icon)
 {
@@ -293,10 +293,16 @@ static int hud_toast(const char *text, const char *detail, float seconds, const 
 }
 static int hud_set(const char *path, uint32_t type, const void *value)
 {
-    check(!strncmp(path, "ui_menu_data.hud_", 17), "only the HUD's own leaves");
+    // The core takes only ui_menu_data.hud_* and view_model_data.hud* leaves (result 3 for any other)
+    if (strncmp(path, "ui_menu_data.hud_", 17) && strncmp(path, "view_model_data.hud", 19)) {
+        check(false, "a leaf the core takes");
+        return SWOFTY_ASSET_INVALID;
+    }
+    bool lap = !strncmp(path, "ui_menu_data.hud_", 17), spool = !strncmp(path, "view_model_data.hud_spool_", 26);
+    check(lap || spool, "only the HUD's own leaves and this addon's");
     if (g_hud_set_result != SWOFTY_ASSET_OK)
         return g_hud_set_result;
-    g_leaf_writes++;
+    (lap ? g_leaf_writes : g_spool_writes)++;
     g_leaves[path] = type == SWOFTY_HUD_TEXT ? std::string(static_cast<const char *>(value)) : std::to_string(*static_cast<const int32_t *>(value));
     return SWOFTY_ASSET_OK;
 }
@@ -306,6 +312,26 @@ static std::string leaf(const char *path)
     auto it = g_leaves.find(path);
     return it == g_leaves.end() ? std::string() : it->second;
 }
+// The game-drawn Pre-Start lights and spool gauge (race_main.idf's spool_prestart, tools/native_hud)
+static bool spool(const char *name)
+{
+    return leaf((std::string("view_model_data.hud_spool_") + name).c_str()) == "1";
+}
+static bool game_lights() { return spool("on") && spool("lamps"); }
+static bool game_gauge() { return spool("on") && spool("gauge"); }
+static int game_slats()
+{
+    int n = 0;
+    char k[8];
+    for (int i = 1; i <= 14; i++) {
+        snprintf(k, sizeof k, "s%02d", i);
+        n += spool(k) ? 1 : 0;
+    }
+    return n;
+}
+// The blue lights and the gauge on screen, whoever draws them: the game, or the overlay when the game HUD is not there
+static bool lights_on_screen() { return overlay_lights() || game_lights(); }
+static bool gauge_shows() { return game_gauge() || painted("TURBO SPOOL"); }
 static bool lap_says_pre_start()
 {
     return leaf(LAP_TEXT) == "PRE-START" && leaf(LAP_LOC_TAG) == "0" && leaf(LAP_NUMBER) == "0" && leaf(LAP_TOTAL) == "0";
@@ -758,6 +784,12 @@ static void reset(const char *name)
     g_toasts.clear();
     g_leaves.clear();
     g_leaf_writes = 0;
+    g_spool_writes = 0;
+    g_native_refused = false;
+    g_native_refresh_at = 0;
+    g_native_logged = false;
+    for (int i = 0; i < NL_COUNT; i++)
+        g_native_known[i] = g_native_sent[i] = false;
     g_settings.clear();
     s_pre_start = s_launch = s_net = s_ai = true;
     s_spool = 3.0f;
@@ -843,7 +875,7 @@ static void test_normal_start()
     check(lights_on_screen(), "the five blue lights show");
     check(lap_says_pre_start(), "the game's lap counter says PRE-START");
     check(!painted("PRE-START"), "the game draws the words: no stand-in box");
-    check(painted("TURBO SPOOL"), "the spool gauge shows");
+    check(gauge_shows(), "the spool gauge shows");
     g_car[PLAYER].rpm = 11000;
     ticks(4.5);
     check(g_phase.load() == P_PRE, "still Pre-Start after 4.5 s");
@@ -856,7 +888,7 @@ static void test_normal_start()
     check(g_phase.load() == P_LIGHTS, "the run follows the lights");
     check(!lights_on_screen(), "the blue lights are gone");
     check(lap_number_back(), "the lap counter has its lap number back");
-    check(painted("TURBO SPOOL"), "the spool gauge stays");
+    check(gauge_shows(), "the spool gauge stays");
     check(g_wait_sim_s > 5.0 && g_wait_sim_s < 5.4, "physics time matches the time played");
     run_to_lights_out(11000);
     wait_layers();
@@ -1110,7 +1142,7 @@ static void test_game_delay()
     tick();
     tick();
     check(!lights_on_screen() && g_leaf_writes == 0, "the first 2 s are the game's");
-    check(painted("TURBO SPOOL"), "the spool gauge shows anyway");
+    check(gauge_shows(), "the spool gauge shows anyway");
     ticks(2.2);
     check(lights_on_screen() && lap_says_pre_start(), "the last 5 s are Pre-Start");
 }
@@ -1335,7 +1367,7 @@ static void test_pause_in_pre_start()
     g_session->at<uint32_t>(SESSION_STATE) = SESSION_PAUSED;
     tick();
     check(!lights_on_screen(), "hidden in the pause menu");
-    check(!painted("TURBO SPOOL"), "the spool gauge too");
+    check(!gauge_shows(), "the spool gauge too");
     int writes = g_leaf_writes;
     for (int i = 0; i < 120; i++)
         tick();
@@ -1476,7 +1508,7 @@ static void test_career_weekend()
     tick();
     check(g_phase.load() == P_PRE, "Pre-Start");
     tick();
-    check(lights_on_screen() && lap_says_pre_start() && painted("TURBO SPOOL"), "the HUD shows");
+    check(lights_on_screen() && lap_says_pre_start() && gauge_shows(), "the HUD shows");
     run_to_lights_out(11000);
     check(g_player_boost.load() > 0.99f, "full boost at lights out");
 
@@ -1577,7 +1609,7 @@ static void test_settings()
     check(std::fabs(g_st->at<float>(ST_DELAY) - 5.f) < 1e-4f, "Pre-Start stays");
     tick();
     tick();
-    check(!painted("TURBO SPOOL"), "no spool gauge");
+    check(!gauge_shows(), "no spool gauge");
     check(lights_on_screen() && lap_says_pre_start(), "Pre-Start shows");
     for (int i = 0; i < 60 * 15 && !g_routed; i++)
         tick();
@@ -2252,7 +2284,98 @@ static void test_threads()
 }
 
 // ------------------------------------------------------------------------------------------------
-// The HUD: the game's own lap counter and message box, the overlay's lights and gauge
+// The HUD: the game's own lap counter and message box, the game's own lights and gauge (the overlay's without a game HUD)
+
+// The game draws the blue lights and the spool gauge itself, from the view_model_data.hud_spool_* leaves
+static void test_native_hud()
+{
+    reset("the game draws the lights and the gauge");
+    session_start("grand_prix", "race");
+    frame_cb(1.0 / 60.0, nullptr);
+    check(g_spool_writes == 19 && leaf("view_model_data.hud_spool_gauge") == "0" && leaf("view_model_data.hud_spool_on") == "0",
+          "all 19 hidden once when the game HUD is there");
+    for (int i = 0; i < 5; i++)
+        frame_cb(1.0 / 60.0, nullptr);
+    check(g_spool_writes == 19, "nothing more written outside a start");
+    enter();
+    tick();
+    tick();
+    check(game_lights() && game_gauge(), "the game's lights and gauge show");
+    check(!overlay_lights() && !painted("TURBO SPOOL"), "the overlay draws neither");
+    check(logged("game HUD lights and gauge: on (19 leaves)"), "logged");
+    bool lit = false, dark = false;
+    for (int i = 0; i < 70 && !(lit && dark); i++) {
+        tick();
+        (spool("lit") ? lit : dark) = true;
+        Sleep(10);
+    }
+    check(lit && dark, "the lamps flash");
+    int writes = g_spool_writes;
+    tick();
+    check(g_spool_writes - writes <= 1, "only what changed is written");
+    g_leaves.clear(); // the game rebuilt its view model
+    g_native_refresh_at = 0;
+    native_hud();
+    check(g_spool_writes - writes >= 19 && game_lights() && game_gauge(), "all of them again on the refresh");
+    g_player_boost = 0.43f;
+    native_hud();
+    check(game_slats() == 6 && !spool("full"), "43 %: 6 of 14 slats");
+    g_player_boost = 0.999f;
+    native_hud();
+    check(game_slats() == 13 && !spool("full"), "not full yet: 13 slats");
+    g_player_boost = 1.f;
+    native_hud();
+    check(game_slats() == 0 && spool("full"), "full: the full row in place of the slats");
+    g_car[PLAYER].rpm = 11000;
+    ticks(5.2);
+    check(g_phase.load() == P_LIGHTS, "the lights run");
+    check(!spool("lamps") && game_gauge(), "the blue lamps go with the first red light, the gauge stays");
+    run_to_lights_out(11000);
+    check(!spool("on") && !spool("gauge") && !spool("full"), "all gone at lights out");
+    writes = g_spool_writes;
+    launch_all(40.f, 2.0);
+    check(g_spool_writes == writes, "nothing more in the run");
+
+    reset("the game's lights and gauge: pause");
+    session_start("grand_prix", "race");
+    enter();
+    tick();
+    ticks(0.5);
+    check(game_lights(), "showing");
+    g_session->at<uint32_t>(SESSION_STATE) = SESSION_PAUSED;
+    tick();
+    check(!spool("on"), "hidden in the pause menu");
+    g_session->at<uint32_t>(SESSION_STATE) = 0;
+    tick();
+    check(game_lights() && game_gauge(), "back after the pause");
+
+    reset("the game's lights and gauge: the session ends in Pre-Start");
+    session_start("grand_prix", "race");
+    enter();
+    tick();
+    tick();
+    check(game_lights(), "showing");
+    fire(SWOFTY_EVENT_SESSION_END);
+    tick();
+    check(g_phase.load() == P_NONE && !spool("on") && !spool("lamps") && !spool("gauge"), "taken down");
+
+    reset("the game's lights and gauge: launch model off");
+    s_launch = false;
+    session_start("grand_prix", "race");
+    enter();
+    tick();
+    tick();
+    check(game_lights() && !spool("gauge"), "the lights, no gauge");
+
+    reset("the game HUD refuses: the overlay draws the lights and the gauge");
+    g_hud_set_result = SWOFTY_ASSET_UNAVAILABLE;
+    session_start("grand_prix", "race");
+    enter();
+    tick();
+    tick();
+    check(g_native_refused.load() && logged("game HUD lights and gauge: view_model_data.hud_spool_"), "refused and logged");
+    check(overlay_lights() && painted("TURBO SPOOL"), "the overlay draws them");
+}
 
 static void test_game_hud()
 {
@@ -2409,6 +2532,7 @@ static bool lights_at(float cx, float y, float k)
 static void test_hud_layout()
 {
     reset("HUD layout at 1920 x 1080");
+    g_hud_up = 0; // the overlay draws the lights and the gauge only when the game HUD is not there
     session_start("grand_prix", "race");
     enter();
     tick();
@@ -2444,6 +2568,7 @@ static void test_hud_layout()
     check(drawn_count('g', alpha(GREEN, 0x61)) == 1, "the bottom glow in the gauge's colour");
 
     reset("HUD layout at 3440 x 1440");
+    g_hud_up = 0; // the overlay draws the lights and the gauge only when the game HUD is not there
     g_screen_w = 3440;
     g_screen_h = 1440;
     session_start("grand_prix", "race");
@@ -2457,6 +2582,7 @@ static void test_hud_layout()
     check(body && std::fabs(body->x - 1520.f) < 0.01f && std::fabs(body->y - 788.f * k) < 0.01f && std::fabs(body->w - 400.f) < 0.01f, "the gauge too");
 
     reset("HUD layout at 1920 x 1200");
+    g_hud_up = 0; // the overlay draws the lights and the gauge only when the game HUD is not there
     g_screen_w = 1920;
     g_screen_h = 1200;
     session_start("grand_prix", "race");
@@ -2669,6 +2795,7 @@ int main(int argc, char **)
     test_timeout();
     test_no_engine_data();
     test_no_car_ops();
+    test_native_hud();
     test_game_hud();
     test_hud_fallback();
     test_hud_layout();

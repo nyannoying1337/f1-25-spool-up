@@ -1,3 +1,4 @@
 native/build/
 native/*.dll
 dist/
+__pycache__/

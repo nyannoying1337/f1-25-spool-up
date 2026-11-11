@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 beta
+
+- **Blue lamps in the game's start lights:** during Pre-Start the five lamps of the game's own start lights on your HUD flash blue, then the red lights run as usual. They are part of the game's race screen now, so they follow its HUD layout and scale.
+- **Turbo Spool in HUD customisation:** the TURBO SPOOL gauge is now one of the game's HUD elements. Move it, resize it, change its opacity or turn it off in the game's HUD customisation, where it is called Turbo Spool. It starts just under the start lights.
+- **DLSS Frame Generation:** the blue lamps and the gauge now show with Frame Generation on too, because the game draws them. Spool Up draws them itself only when the game's HUD refuses them.
+- **Log:** the two cases in which the start lights skipped a start without a log line now write one.
+- **Swofty Launcher 1.8.38 or newer** is now needed.
+
 ## 0.2.2 beta
 
 - **Race weekends:** Spool Up now also runs in a race that follows practice or qualifying in the same weekend. Before, it ran only when the race or sprint was the first session you entered that weekend, because the session name it checked stays on the weekend's first session. It now reads the game's own session type at the start lights.
