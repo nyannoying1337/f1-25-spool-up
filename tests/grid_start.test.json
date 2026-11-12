@@ -48,6 +48,10 @@
           "min": 1
         },
         {
+          "log": "wrap Sess_RedFlagToRestart_Enter at .* installed: .*grid_start_2026",
+          "min": 1
+        },
+        {
           "no_crash": true
         }
       ]

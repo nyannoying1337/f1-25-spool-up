@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 beta
+
+- **Red flag restarts:** the 5 s Pre-Start no longer runs at a red flag restart. The game gives you no throttle there until its red lights begin, so the Pre-Start was 5 s in which you could not spool the turbo. The red lights now begin as in the standard game, and you spool the turbo under them.
+
 ## 0.3.0 beta
 
 - **Blue lamps in the game's start lights:** during Pre-Start the five lamps of the game's own start lights on your HUD flash blue, then the red lights run as usual. They are part of the game's race screen now, so they follow its HUD layout and scale.

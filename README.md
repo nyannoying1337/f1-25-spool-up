@@ -10,7 +10,7 @@ The real 2026 cars have no MGU-H, so nothing keeps the turbo spinning on the gri
 
 ## What you get
 
-- **Pre-Start.** For 5 s before the first red light the light panels along the track flash blue, the five lamps of the game's own start lights on your HUD flash blue, and the game's lap counter says PRE-START. Then the game's own five lights. Also after a formation lap and at a standing restart.
+- **Pre-Start.** For 5 s before the first red light the light panels along the track flash blue, the five lamps of the game's own start lights on your HUD flash blue, and the game's lap counter says PRE-START. Then the game's own five lights. Also after a formation lap. A red flag restart has no Pre-Start: the game gives you no throttle until its red lights begin, so you spool the turbo under the red lights there.
 - **Turbo spool.** A TURBO SPOOL gauge under the start lights, drawn by the game's own HUD. Move it, resize it or turn it off in the game's HUD customisation, where it is called Turbo Spool. Hold 10,000 rpm or more and it fills in 3 s, then turns green and says FULL. Drop below that while you wait and it falls again. With an empty gauge the engine has about a third of its power when the lights go out.
 - **Low-output safety net.** A car on low boost that accelerates abnormally slowly gets just enough MGU-K from its own battery to hold a minimum acceleration until 50 km/h. The game's own message box shows LOW-OUTPUT START, or SLOW CAR AHEAD when it is an AI car in front of you. The net turns a disastrous start into a bad one, never a good one.
 - **AI that can get it wrong.** Each AI car gets a random start: most are clean, some poor, about 1 in 20 fumbled. A fumbled car bogs for 1.5 s, so gaps open up on the grid.
@@ -60,6 +60,7 @@ In ADDON SETTINGS on the home menu (directly under Career, or F9 / R3), or in th
 
 - Raced so far: Driver Career races at Shanghai and Suzuka and a two-round Grand Prix, with the default settings. My Team and sprints run the same code.
 - **Custom settings are untested** in a real race.
+- A red flag restart is untested in a real race. Its start without Pre-Start is new in 0.3.1.
 - Not tried in a real race yet either: a start after a driven formation lap, a grid of non-2026 cars and the warnings in the game's message box.
 - The trackside panels flash blue in the game's log, but nobody has seen them on screen yet.
 
@@ -95,7 +96,7 @@ The FIA has not published its trigger values, so these are my own tuning values:
 ## How it works
 
 - Which starts: the mode from Swofty's `session.start` (Grand Prix, Driver Career or My Team; Swofty reports online modes as unknown), then the game's own session type at the start lights, race or sprint. Swofty's session name stays on the weekend's first session, so it only counts when the game's type cannot be read.
-- `Sess_StartLights_Enter` (wrap): reads every car from the core's car table before it changes anything, then adds 5 s to the game's own countdown. The game's update counts it down, stops it while paused, then starts the lights.
+- `Sess_StartLights_Enter` (wrap): reads every car from the core's car table before it changes anything, then adds 5 s to the game's own countdown. The game's update counts it down, stops it while paused, then starts the lights. `Sess_RedFlagToRestart_Enter` (wrap) marks the next start as a red flag restart, which gets no extra seconds: the game's red flag system frees the cars on the message the update sends when its countdown ends.
 - `Sess_MarshalLights_UpdateZoneShader` (wrap, per panel, per tick): during Pre-Start it writes the game's own blue flag values, or its own off values on the flash's other half, just before the game sends them to the panel's shader. The game writes each panel again on its next tick, so nothing needs putting back.
 - `Car_Powertrain_Step` (wrap, per car, 360 Hz): reads engine speed, car speed, physics time and what the game deployed. For a car the safety net flagged, below 50 km/h, it makes that car's own deploy curve answer the share it needs for the length of the game's call, then puts the curve back. Everything past the curve is the game's own: the ERS mode's limit, the energy, the torque clamp, the throttle split and the brake and idle gates.
 - Engine power goes through `engine.power_scale` layers at priority 40, under Terminal Damage's fault scale (50) and engine kill (100).
@@ -104,7 +105,7 @@ The FIA has not published its trigger values, so these are my own tuning values:
 To check that it runs, look in the log (`swofty\loader.log` in your F1 25 folder, while the game runs) for:
 
 ```
-[gridstart] 0.3.0 ready: build check ok, ...
+[gridstart] 0.3.1 ready: build check ok, ...
 [gridstart] StartLights enter: 23 cars, 22 F1 2026, 0 others with an ERS (handling version 9, max deploy 350000 W)
 [gridstart] run started: game delay 0.00 s, Pre-Start +5.00 s, launch model on, safety net on, AI on, spool 3.0 s at 10000 rpm
 [gridstart] lap counter shows PRE-START

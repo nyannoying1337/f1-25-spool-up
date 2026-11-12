@@ -404,6 +404,12 @@ static int api_watch(const char *, SwoftySettingFn, void *) { return 1; }
 
 static std::vector<SwoftyMixin> g_mixins;
 static void *g_fake_enter_fn, *g_fake_step_fn, *g_fake_zone_fn;
+static int g_restart_calls;
+static uintptr_t fake_restart(void *, void *, void *, void *)
+{
+    g_restart_calls++;
+    return 1;
+}
 static int api_mixins(const SwoftyMixin *m, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
@@ -411,6 +417,7 @@ static int api_mixins(const SwoftyMixin *m, size_t n)
         if (m[i].orig)
             *m[i].orig = !strcmp(m[i].target, "Sess_StartLights_Enter") ? g_fake_enter_fn
                          : !strcmp(m[i].target, "Sess_MarshalLights_UpdateZoneShader") ? g_fake_zone_fn
+                         : !strcmp(m[i].target, "Sess_RedFlagToRestart_Enter") ? reinterpret_cast<void *>(&fake_restart)
                                                                                        : g_fake_step_fn;
     }
     return 1;
@@ -796,6 +803,7 @@ static void reset(const char *name)
     s_spool_rpm = 10000.f;
     g_offline = false;
     g_race_label = false;
+    g_red_restart = false;
     g_pending_st = 0;
     g_table_down = false;
     g_table_late = -1;
@@ -1130,6 +1138,53 @@ static void test_formation_lap_leftover_no_pre_start()
     tick();
     check(g_sl->at<uint8_t>(SL_STATE) == 1, "the game starts the lights in its first update");
     run_to_lights_out(11000);
+}
+
+// A red flag restart: the game holds the cars until its lights begin, so the start gets no Pre-Start.
+static void test_red_flag_restart()
+{
+    reset("red flag restart");
+    session_start("my_team", "race");
+    enter();
+    check(std::fabs(g_st->at<float>(ST_DELAY) - 5.f) < 1e-4f, "the race start has its Pre-Start");
+    run_to_lights_out(11000);
+    ticks(3.0);
+    int calls = g_restart_calls;
+    check(restart_hook(reinterpret_cast<void *>(g_st->p()), nullptr, nullptr, nullptr) == 1 && g_restart_calls == calls + 1, "the restart state runs the game's own enter");
+    g_sl->at<uint8_t>(SL_STATE) = 0; // Game_StartLights_Reset, from the red flag's freeze state
+    g_st->at<float>(ST_DELAY) = 0;
+    g_routed = false;
+    enter();
+    check(logged("red flag restart, no Pre-Start"), "the restart is logged");
+    check(g_st->at<float>(ST_DELAY) == 0.f, "no seconds added: the lights begin as the game has them");
+    frame_cb(1.0 / 60.0, nullptr);
+    check(g_phase.load() == P_LIGHTS && !lights_on_screen() && !lap_says_pre_start(), "no Pre-Start on screen");
+    tick();
+    check(g_sl->at<uint8_t>(SL_STATE) == 1, "the red lights begin at once");
+    tick();
+    check(gauge_shows() && !lights_on_screen(), "the spool gauge shows under the red lights, and no blue lamps");
+    run_to_lights_out(11000);
+    check(g_player_boost.load() > 0.99f, "the turbo is full at lights out");
+
+    reset("the start after a red flag restart");
+    session_start("my_team", "race");
+    enter();
+    check(std::fabs(g_st->at<float>(ST_DELAY) - 5.f) < 1e-4f, "the next start has its Pre-Start again");
+
+    reset("a red flag restart that never reached the lights");
+    session_start("my_team", "race");
+    restart_hook(reinterpret_cast<void *>(g_st->p()), nullptr, nullptr, nullptr);
+    fire(SWOFTY_EVENT_SESSION_UNLOAD);
+    session_start("grand_prix", "race");
+    enter();
+    check(std::fabs(g_st->at<float>(ST_DELAY) - 5.f) < 1e-4f, "a new session forgets the restart");
+
+    reset("red flag restart, Pre-Start off");
+    session_start("my_team", "race");
+    s_pre_start = false;
+    restart_hook(reinterpret_cast<void *>(g_st->p()), nullptr, nullptr, nullptr);
+    enter();
+    check(!logged("red flag restart, no Pre-Start") && g_st->at<float>(ST_DELAY) == 0.f, "nothing to skip, nothing logged");
 }
 
 static void test_game_delay()
@@ -2665,16 +2720,17 @@ static void test_init()
     g_fake_zone_fn = reinterpret_cast<void *>(&fake_zone_update);
     g_settings = {{"pre_start", 1}, {"launch_model", 1}, {"safety_net", 1}, {"apply_to_ai", 1}, {"spool_seconds", 3}, {"spool_rpm", 10000}};
     check(SwoftyAddonInit(&api) == 1, "loads");
-    check(g_mixins.size() == 3, "three mixins");
-    bool enter_wrap = false, step_wrap = false, zone_wrap = false;
+    check(g_mixins.size() == 4, "four mixins");
+    bool enter_wrap = false, step_wrap = false, zone_wrap = false, restart_wrap = false;
     for (const auto &m : g_mixins) {
         enter_wrap = enter_wrap || (!strcmp(m.target, "Sess_StartLights_Enter") && m.kind == SWOFTY_MIXIN_WRAP && m.orig && m.handler);
         step_wrap = step_wrap || (!strcmp(m.target, "Car_Powertrain_Step") && m.kind == SWOFTY_MIXIN_WRAP && m.orig && m.handler);
         zone_wrap = zone_wrap || (!strcmp(m.target, "Sess_MarshalLights_UpdateZoneShader") && m.kind == SWOFTY_MIXIN_WRAP && m.orig && m.handler);
+        restart_wrap = restart_wrap || (!strcmp(m.target, "Sess_RedFlagToRestart_Enter") && m.kind == SWOFTY_MIXIN_WRAP && m.orig && m.handler);
         check(SWOFTY_MIXIN_KIND(m.kind) != SWOFTY_MIXIN_SITE, "no site: the core owns the torque site, and a site there drops the whole addon");
     }
-    check(enter_wrap && step_wrap && zone_wrap, "wraps on the lights enter, the powertrain and the zone update");
-    check(g_enter_orig && g_powertrain_orig && g_zone_orig, "originals kept");
+    check(enter_wrap && step_wrap && zone_wrap && restart_wrap, "wraps on the lights enter, the powertrain, the zone update and the red flag restart");
+    check(g_enter_orig && g_powertrain_orig && g_zone_orig && g_restart_orig, "originals kept");
     check(g_frame_fn == frame_cb && g_session_fn == on_session_hook, "frame and session.start attached");
     check(std::find(g_events.begin(), g_events.end(), SWOFTY_EVENT_PAUSE) == g_events.end(), "no pause event: the catalogue says it never fires");
     check(std::find(g_events.begin(), g_events.end(), SWOFTY_EVENT_RACE_START) == g_events.end(), "no race.start: it fires before the lights");
@@ -2770,6 +2826,7 @@ int main(int argc, char **)
     test_trackside_panels_not_on();
     test_formation_lap_leftover();
     test_formation_lap_leftover_no_pre_start();
+    test_red_flag_restart();
     test_game_delay();
     test_only_f1_2026();
     test_no_revs();

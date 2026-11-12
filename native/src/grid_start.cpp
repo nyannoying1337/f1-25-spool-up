@@ -10,6 +10,11 @@
 // 5 s there delays the game's own sequence, so the lights, the AI reactions and the jump start rules are untouched. The
 // update skips the countdown while the session is paused, so the Pre-Start pauses with the game.
 //
+// Red flag restarts. The update sends MessageStartLightsBegin when the countdown ends, and the red flag system
+// (Sess_RedFlagSystem_PrepareRestart, 0x143584c00) subscribes to exactly that message for its restart. Players get no
+// throttle until then, so five more seconds of countdown are five seconds without one. A start that follows the red
+// flag's restart state (Sess_RedFlagToRestart_Enter, wrapped) gets no Pre-Start: the turbo spools under the red lights.
+//
 // Trackside panels. The light panels along the track are models that the game's marshal lights system colours itself.
 // Every tick it writes a colour and a mode into each zone, then hands the zone to its zone update (0x142c786b0), which
 // sends both to the model's shader. During Pre-Start the wrap on that update writes the game's own blue flag values on the
@@ -52,7 +57,7 @@
 
 namespace {
 
-constexpr char GS_VERSION[] = "0.3.0";
+constexpr char GS_VERSION[] = "0.3.1";
 
 // Offsets, build d873a1c8d2044cef. CODE_CHECKS below turns the whole mod off on any other exe.
 constexpr uintptr_t ST_SESSION = 0xc98;    // session: +0x1e8 state, +0x1a8 descriptor
@@ -157,6 +162,8 @@ const CodeCheck CODE_CHECKS[] = {
     {0x2c77686, "zone update call", {0xE8, 0x25, 0x10, 0x00, 0x00}, 5},
     {0x2c77baa, "blue flag, colour", {0xC4, 0xC1, 0x78, 0x29, 0x46, 0x10}, 6},
     {0x2c77bb6, "blue flag, mode", {0xC4, 0xC1, 0x78, 0x29, 0x5E, 0x20}, 6},
+    {0x2dff5be, "red flag restart state, restart prepared", {0x48, 0x8B, 0x8F, 0xB0, 0x0D, 0x00, 0x00, 0xE8, 0x36, 0x56, 0x78, 0x00}, 12},
+    {0x3585de4, "red flag system waits for the lights", {0x48, 0x8D, 0x0D, 0xC5, 0x0B, 0x00, 0x00}, 7},
 };
 
 constexpr uint32_t MAX_CARS = 26;
@@ -181,7 +188,7 @@ double g_ov_retry;
 
 using EnterFn = uintptr_t (*)(void *, void *, void *, void *);
 using PowertrainFn = void (*)(void *);
-EnterFn g_enter_orig;
+EnterFn g_enter_orig, g_restart_orig;
 PowertrainFn g_powertrain_orig;
 using ZoneFn = void (*)(void *, void *);
 ZoneFn g_zone_orig;
@@ -291,6 +298,7 @@ std::atomic<bool> g_pending_pre{false};
 std::atomic<const char *> g_end_request{nullptr};
 std::atomic<bool> g_offline{false};    // session.start: Grand Prix, Driver Career or My Team
 std::atomic<bool> g_race_label{false}; // session.start: the core's session label says race or sprint
+std::atomic<bool> g_red_restart{false}; // the red flag's restart state was entered: the next start is its restart
 
 // Frame to overlay
 std::atomic<float> g_player_boost{0}, g_delay_left{0};
@@ -478,6 +486,7 @@ void on_enter(uintptr_t st, uint8_t once)
         return;
     }
 
+    bool red_restart = g_red_restart.exchange(false);
     GridRead grid = read_grid();
     glog("StartLights enter: %u cars, %u F1 2026, %u others with an ERS (handling version %u, max deploy %.0f W)", grid.cars, grid.f1_2026, grid.other, grid.handling, grid.deploy);
 
@@ -509,6 +518,10 @@ void on_enter(uintptr_t st, uint8_t once)
         return;
     }
     bool pre = s_pre_start.load();
+    if (pre && red_restart) {
+        pre = false;
+        glog("StartLights enter: red flag restart, no Pre-Start: the game gives the throttle back when its lights begin");
+    }
     if (!pre && !s_launch.load())
         return;
     // After a formation lap the lights object still says "finished" from the formation's one light. The game restarts
@@ -580,6 +593,13 @@ uintptr_t enter_hook(void *self, void *b, void *c, void *d)
     uintptr_t r = g_enter_orig(self, b, c, d);
     on_enter_guarded(st, once);
     return r;
+}
+
+// The state the game enters when a red flag ends in a restart. Only the fact is taken: no argument is read.
+uintptr_t restart_hook(void *self, void *b, void *c, void *d)
+{
+    g_red_restart = true;
+    return g_restart_orig(self, b, c, d);
 }
 
 void sample_car(uintptr_t pt, uintptr_t car, uintptr_t ers, LiveCar &l)
@@ -1504,6 +1524,7 @@ void on_event(const SwoftyEvent *ev, void *)
     if (!strcmp(ev->name, SWOFTY_EVENT_SESSION_UNLOAD)) {
         g_offline = false;
         g_race_label = false;
+        g_red_restart = false;
     }
     g_end_request = "session over";
 }
@@ -1523,6 +1544,7 @@ int on_session_hook(void *, SwoftyHookCall *call)
     bool race = sr == SWOFTY_ASSET_OK && (strstr(sess, "\"type\":\"race\"") || strstr(sess, "\"type\":\"sprint\""));
     g_offline = offline;
     g_race_label = race;
+    g_red_restart = false;
     glog("session.start: mode %s, session %s -> %s", mode, sess, offline ? "offline mode, the lights check the session type and the cars" : "mod idle in this session");
     return 0;
 }
@@ -1583,6 +1605,7 @@ int init_impl(const SwoftyApi *api)
         {"Sess_StartLights_Enter", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&enter_hook), reinterpret_cast<void **>(&g_enter_orig)},
         {"Car_Powertrain_Step", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&powertrain_hook), reinterpret_cast<void **>(&g_powertrain_orig)},
         {"Sess_MarshalLights_UpdateZoneShader", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&zone_hook), reinterpret_cast<void **>(&g_zone_orig)},
+        {"Sess_RedFlagToRestart_Enter", SWOFTY_MIXIN_WRAP, 0, reinterpret_cast<void *>(&restart_hook), reinterpret_cast<void **>(&g_restart_orig)},
     };
     int mr = api->register_mixins(mix, sizeof mix / sizeof mix[0]);
 
