@@ -15,6 +15,12 @@
 // throttle until then, so five more seconds of countdown are five seconds without one. A start that follows the red
 // flag's restart state (Sess_RedFlagToRestart_Enter, wrapped) gets no Pre-Start: the turbo spools under the red lights.
 //
+// Game builds. Steam F1 25 1.0.145 (build 26566308) and 1.0.141 (build 25251167) each have a table of the instructions
+// the offsets below were read from. The first table that matches the running game in full picks the build; with none,
+// the mod stays idle. On 1.0.145 the same instructions sit 0x2590 bytes further on (lights, session, body, curve, panels,
+// red flag) or 0x2870 (powertrain, loader), two calls reach functions that moved by other amounts, and the ERS flags from
+// +0x1a62 moved by four bytes, so the curve flag is per build. The addresses in the comments are 1.0.141's.
+//
 // Trackside panels. The light panels along the track are models that the game's marshal lights system colours itself.
 // Every tick it writes a colour and a mode into each zone, then hands the zone to its zone update (0x142c786b0), which
 // sends both to the model's shader. During Pre-Start the wrap on that update writes the game's own blue flag values on the
@@ -57,9 +63,10 @@
 
 namespace {
 
-constexpr char GS_VERSION[] = "0.3.1";
+constexpr char GS_VERSION[] = "0.3.2";
 
-// Offsets, build d873a1c8d2044cef. CODE_CHECKS below turns the whole mod off on any other exe.
+// Offsets, the same on both builds but the curve flag (GameBuild). The build checks below turn the whole mod off on any
+// other exe.
 constexpr uintptr_t ST_SESSION = 0xc98;    // session: +0x1e8 state, +0x1a8 descriptor
 constexpr uintptr_t ST_LIGHTS = 0xdb0;     // StartLights *
 constexpr uintptr_t ST_ONCE = 0xdc8;       // u8, set by the enter's first run
@@ -83,7 +90,6 @@ constexpr uintptr_t SYS_OWNER = 0x8;       // system+8 == its CarLive
 constexpr uintptr_t ENGINE_RAD_S = 0x2538; // float
 constexpr uintptr_t ERS_MAX_DEPLOY = 0x28; // float, W
 constexpr uintptr_t ERS_DEPLOY = 0x1a0c;   // float, W, what this step deployed
-constexpr uintptr_t ERS_CURVE_FLAG = 0x1a62; // u8, the step picks the second deploy curve when it is set
 constexpr uintptr_t ERS_CURVE = 0x88;      // CarSpline, the deploy curve: m/s to a share of the max deploy
 constexpr uintptr_t ERS_CURVE_2 = 0x330;   // CarSpline, the second one
 constexpr uintptr_t SPLINE_SCALE = 0x60;   // CarObfFloat: the value is this dword ^ the dword OBF_KEY after it
@@ -113,8 +119,9 @@ struct CodeCheck {
     size_t n;
 };
 
-// The instructions the offsets above were read from. None overlaps a hook this or the core installs.
-const CodeCheck CODE_CHECKS[] = {
+// F1 25 1.0.141 (Steam build 25251167, exe d873a1c8d2044cef): the instructions the offsets above were read from. None
+// overlaps a hook this or the core installs.
+const CodeCheck CHECKS_1_0_141[] = {
     {0x2d8fcc0, "lights update prologue", {0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50}, 14},
     {0x2cd5d80, "lights reset, enabled flag", {0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x80, 0xB9, 0xBD, 0x0B, 0x00, 0x00, 0x00}, 18},
     {0x2d8fda4, "session pointer, pause state", {0x48, 0x8B, 0x87, 0x98, 0x0C, 0x00, 0x00, 0x83, 0xB8, 0xE8, 0x01, 0x00, 0x00, 0x10}, 14},
@@ -165,6 +172,76 @@ const CodeCheck CODE_CHECKS[] = {
     {0x2dff5be, "red flag restart state, restart prepared", {0x48, 0x8B, 0x8F, 0xB0, 0x0D, 0x00, 0x00, 0xE8, 0x36, 0x56, 0x78, 0x00}, 12},
     {0x3585de4, "red flag system waits for the lights", {0x48, 0x8D, 0x0D, 0xC5, 0x0B, 0x00, 0x00}, 7},
 };
+
+// F1 25 1.0.145 (Steam build 26566308, exe 46009bd31f49d93a): the same instructions in the same order. Three differ in their
+// bytes: the curve flag at +0x1a66, and the deploy curve call and the send, whose callees moved by other amounts.
+const CodeCheck CHECKS_1_0_145[] = {
+    {0x2d92250, "lights update prologue", {0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50}, 14},
+    {0x2cd8310, "lights reset, enabled flag", {0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x80, 0xB9, 0xBD, 0x0B, 0x00, 0x00, 0x00}, 18},
+    {0x2d92334, "session pointer, pause state", {0x48, 0x8B, 0x87, 0x98, 0x0C, 0x00, 0x00, 0x83, 0xB8, 0xE8, 0x01, 0x00, 0x00, 0x10}, 14},
+    {0x2d92348, "the countdown", {0xC5, 0xFA, 0x10, 0x87, 0xF0, 0x0D, 0x00, 0x00}, 8},
+    {0x2d9235e, "lights object, state and mode", {0x48, 0x8B, 0x87, 0xB0, 0x0D, 0x00, 0x00, 0x80, 0x78, 0x29, 0x00, 0x74, 0x06, 0x80, 0x78, 0x28, 0x02}, 17},
+    {0x2d92a5d, "lights finished", {0x80, 0x78, 0x29, 0x04}, 4},
+    {0x2d9203c, "first-run flag", {0xC6, 0x86, 0xC8, 0x0D, 0x00, 0x00, 0x01}, 7},
+    {0x46e4b69, "powertrain car and engine", {0x48, 0x89, 0xCE, 0x48, 0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x41, 0x18}, 14},
+    {0x46e4f3e, "engine speed", {0xC5, 0xFA, 0x10, 0x8B, 0x38, 0x25, 0x00, 0x00}, 8},
+    {0x46e509d, "car ERS", {0x4C, 0x8B, 0xB0, 0xA8, 0x05, 0x00, 0x00}, 7},
+    {0x46e5104, "max deploy, target", {0xC4, 0xC1, 0x7A, 0x10, 0x4E, 0x28}, 6},
+    {0x46e5261, "max deploy, cap", {0xC4, 0xC1, 0x7A, 0x10, 0x5E, 0x28}, 6},
+    {0x46e54f7, "deploy written", {0xC4, 0xC1, 0x7A, 0x11, 0x86, 0x0C, 0x1A, 0x00, 0x00}, 9},
+    {0x46dedaf, "substep time", {0xC5, 0xFA, 0x11, 0x96, 0x48, 0x0A, 0x00, 0x00}, 8},
+    {0x2cfc008, "body position", {0x48, 0x8B, 0x88, 0xC0, 0x01, 0x00, 0x00}, 7},
+    {0x2cfc017, "body velocity", {0x48, 0x8B, 0x90, 0x20, 0x02, 0x00, 0x00}, 7},
+    {0x2cfbfd5, "car chassis, its rigid body", {0x49, 0x8B, 0x95, 0x58, 0x05, 0x00, 0x00, 0x48, 0x8B, 0x92, 0x40, 0x03, 0x00, 0x00}, 14},
+    {0x2cfbfec, "the body", {0x48, 0x8B, 0x42, 0x18}, 4},
+    {0x46e4bd6, "AI flag", {0x83, 0xB8, 0x24, 0x01, 0x00, 0x00, 0x01}, 7},
+    {0x2d923a9, "session descriptor", {0x48, 0x8B, 0x80, 0xA8, 0x01, 0x00, 0x00}, 7},
+    {0x2c1bb91, "vehicle id", {0x41, 0x0F, 0xB6, 0x9E, 0xE8, 0x00, 0x00, 0x00}, 8},
+    {0x46e510a, "system owner", {0x49, 0x8B, 0x4E, 0x08}, 4},
+    {0x46e5250, "handling version, against 2026's", {0x83, 0xB8, 0x40, 0x9F, 0x00, 0x00, 0x09}, 7},
+    {0x2e8a820, "curve last index", {0x8B, 0x81, 0x90, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x78, 0x77}, 10},
+    {0x2e8a82a, "curve scale and offset", {0x8B, 0x51, 0x60, 0x44, 0x8B, 0x41, 0x70, 0x33, 0x51, 0x68}, 10},
+    {0x2e8a838, "curve offset key", {0x44, 0x33, 0x41, 0x78}, 4},
+    {0x2e8a84d, "curve at or below the first sample", {0xC5, 0xF8, 0x2E, 0xC8, 0x0F, 0x83, 0xA3, 0x00, 0x00, 0x00}, 10},
+    {0x2e8a85c, "curve at or past the last index", {0x39, 0xD0, 0x0F, 0x8E, 0xA7, 0x00, 0x00, 0x00}, 8},
+    {0x2e8a8fa, "curve first sample", {0x8B, 0x81, 0x98, 0x00, 0x00, 0x00, 0x33, 0x81, 0xA0, 0x00, 0x00, 0x00}, 12},
+    {0x2e8a90f, "curve last sample", {0x8B, 0x94, 0x01, 0x98, 0x00, 0x00, 0x00, 0x33, 0x94, 0x01, 0xA0, 0x00, 0x00, 0x00}, 14},
+    {0x467038b, "the loader's scale and offset of 0", {0x44, 0x8B, 0x4E, 0x68, 0x44, 0x89, 0x4E, 0x60, 0x44, 0x8B, 0x46, 0x78, 0x44, 0x89, 0x46, 0x70}, 16},
+    {0x46e51e9, "deploy curve, first and second", {0x49, 0x8D, 0x46, 0x70, 0x49, 0x8D, 0x8E, 0x18, 0x03, 0x00, 0x00}, 11},
+    {0x46e51f4, "deploy curve flag", {0x41, 0x80, 0xBE, 0x66, 0x1A, 0x00, 0x00, 0x00}, 8},
+    {0x46e523d, "deploy curve call", {0x48, 0x83, 0xC1, 0x18, 0xC5, 0xF8, 0x28, 0x4C, 0x24, 0x40, 0xE8, 0xD4, 0x55, 0x7A, 0xFE}, 15},
+    {0x46e52ad, "cap: curve x max deploy", {0xC5, 0xFA, 0x59, 0xF3}, 4},
+    {0x2c7ac47, "zone update arguments", {0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF}, 6},
+    {0x2c7acb1, "zone update shader switch", {0x80, 0xBF, 0xA0, 0x00, 0x00, 0x00, 0x00}, 7},
+    {0x2c7acbe, "zone model", {0x48, 0x8B, 0x7E, 0x40, 0x48, 0x85, 0xFF}, 7},
+    {0x2c7accb, "zone model instance", {0x48, 0x8B, 0x8F, 0x80, 0x00, 0x00, 0x00}, 7},
+    {0x2c7acdb, "zone colour sent", {0x48, 0x83, 0xC6, 0x10}, 4},
+    {0x2c7acf7, "two values sent", {0x41, 0xB9, 0x02, 0x00, 0x00, 0x00}, 6},
+    {0x2c7acfd, "the send", {0xE8, 0xAE, 0x51, 0x0C, 0x01}, 5},
+    {0x2c79c45, "panels off, colour", {0xC4, 0xC1, 0x78, 0x29, 0x46, 0x10}, 6},
+    {0x2c79c53, "panels off, mode", {0xC4, 0xC1, 0x78, 0x29, 0x5E, 0x20}, 6},
+    {0x2c79c16, "zone update call", {0xE8, 0x25, 0x10, 0x00, 0x00}, 5},
+    {0x2c7a13a, "blue flag, colour", {0xC4, 0xC1, 0x78, 0x29, 0x46, 0x10}, 6},
+    {0x2c7a146, "blue flag, mode", {0xC4, 0xC1, 0x78, 0x29, 0x5E, 0x20}, 6},
+    {0x2e01b4e, "red flag restart state, restart prepared", {0x48, 0x8B, 0x8F, 0xB0, 0x0D, 0x00, 0x00, 0xE8, 0x36, 0x56, 0x78, 0x00}, 12},
+    {0x3588374, "red flag system waits for the lights", {0x48, 0x8D, 0x0D, 0xC5, 0x0B, 0x00, 0x00}, 7},
+};
+
+struct GameBuild {
+    const char *name;
+    const CodeCheck *checks;
+    size_t n;
+    uintptr_t curve_flag; // u8 in the ERS record: the step picks the second deploy curve when it is set
+};
+
+// The builds this mod knows, newest first. The first whose checks all match the running game is the one it runs on.
+const GameBuild BUILDS[] = {
+    {"F1 25 1.0.145 (Steam build 26566308)", CHECKS_1_0_145, sizeof CHECKS_1_0_145 / sizeof CHECKS_1_0_145[0], 0x1a66},
+    {"F1 25 1.0.141 (Steam build 25251167)", CHECKS_1_0_141, sizeof CHECKS_1_0_141 / sizeof CHECKS_1_0_141[0], 0x1a62},
+};
+
+// The running build's curve flag. Init sets it before it installs a hook; only the hooks read it.
+uintptr_t g_curve_flag = 0x1a62;
 
 constexpr uint32_t MAX_CARS = 26;
 constexpr uint32_t SAMPLE_EVERY = 6;      // of the 360 substeps a second: 60 samples per car
@@ -656,7 +733,7 @@ struct StepWatch {
 // from inside the record, whichever of these two writes it catches.
 void curve_override(uintptr_t ers, float share, StepWatch &w)
 {
-    uintptr_t curve = ers + (*reinterpret_cast<uint8_t *>(ers + ERS_CURVE_FLAG) ? ERS_CURVE_2 : ERS_CURVE);
+    uintptr_t curve = ers + (*reinterpret_cast<uint8_t *>(ers + g_curve_flag) ? ERS_CURVE_2 : ERS_CURVE);
     auto *last = reinterpret_cast<volatile int32_t *>(curve + SPLINE_LAST);
     auto *sample = reinterpret_cast<volatile uint32_t *>(curve + SPLINE_SAMPLES);
     w.saved_last = *last;
@@ -1559,6 +1636,25 @@ bool code_matches(uintptr_t rva, const unsigned char *bytes, size_t n)
     }
 }
 
+// The build whose checks all match the running game, or null. `why` gets each build's first difference.
+const GameBuild *running_build(char *why, size_t cap)
+{
+    size_t used = 0;
+    for (const auto &b : BUILDS) {
+        const CodeCheck *bad = nullptr;
+        for (size_t i = 0; i < b.n && !bad; i++)
+            if (!code_matches(b.checks[i].rva, b.checks[i].bytes, b.checks[i].n))
+                bad = &b.checks[i];
+        if (!bad)
+            return &b;
+        int w = snprintf(why + used, cap - used, "%s%s differs at %s (0x%llx)", used ? ", " : "", b.name, bad->what,
+                         static_cast<unsigned long long>(bad->rva));
+        if (w > 0)
+            used = std::min(cap - 1, used + size_t(w));
+    }
+    return nullptr;
+}
+
 template <class T> const T *core_table(const char *exp)
 {
     HMODULE core = GetModuleHandleW(L"swofty_core.dll");
@@ -1573,11 +1669,14 @@ int init_impl(const SwoftyApi *api)
         glog("needs Swofty API v9, the core offers v%u; idle", api->version);
         return 1;
     }
-    for (const auto &c : CODE_CHECKS)
-        if (!code_matches(c.rva, c.bytes, c.n)) {
-            glog("%s idle: this game build differs at %s (0x%llx); standard starts", GS_VERSION, c.what, static_cast<unsigned long long>(c.rva));
-            return 1;
-        }
+    char why[320] = "";
+    const GameBuild *build = running_build(why, sizeof why);
+    if (!build) {
+        glog("%s idle: this game build is none it knows (%s); standard starts", GS_VERSION, why);
+        return 1;
+    }
+    g_curve_flag = build->curve_flag;
+    glog("%s runs on %s", GS_VERSION, build->name);
     read_settings();
     if (api->watch_setting) {
         for (const char *id : {"pre_start", "launch_model", "safety_net", "apply_to_ai", "spool_seconds", "spool_rpm"})

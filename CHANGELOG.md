@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 beta
+
+- **F1 25 1.0.145:** Spool Up now runs on the game's 1.0.145 update (Steam build 26566308), and still on 1.0.141. With 0.3.1 on 1.0.145, Spool Up stayed idle and every start was the standard one.
+- **Log:** the log now names the game build Spool Up runs on, or, on a build it does not know, where each known build differs.
+- **Swofty's Addons page** now shows whether your game build is one Spool Up runs on.
+
 ## 0.3.1 beta
 
 - **Red flag restarts:** the 5 s Pre-Start no longer runs at a red flag restart. The game gives you no throttle there until its red lights begin, so the Pre-Start was 5 s in which you could not spool the turbo. The red lights now begin as in the standard game, and you spool the turbo under them.

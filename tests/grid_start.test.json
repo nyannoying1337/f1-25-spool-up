@@ -36,6 +36,10 @@
           "max": 0
         },
         {
+          "log": "\\[gridstart\\] [0-9.]+ runs on F1 25 1\\.0\\.14[15] \\(Steam build [0-9]+\\)",
+          "min": 1
+        },
+        {
           "log": "\\[gridstart\\] [0-9.]+ ready: build check ok, mixins 1",
           "min": 1
         },

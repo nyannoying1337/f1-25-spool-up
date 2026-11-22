@@ -36,7 +36,7 @@ Time from lights out to 50 km/h, measured in the game with the default settings 
 
 ## Requirements
 
-- F1 25 on Steam, build 25251167. The EA app version is not supported. After a game update Spool Up stays idle and the game runs as normal, until a new version is out.
+- F1 25 on Steam, version 1.0.145 (build 26566308) or 1.0.141 (build 25251167). The EA app version is not supported. After a game update Spool Up stays idle and the game runs as normal, until a new version is out.
 - The official 2026 Season Pack, for the F1 2026 cars.
 - Swofty Launcher 1.8.38 or newer.
 - Offline Grand Prix, Driver Career or My Team, races and sprints.
@@ -95,6 +95,7 @@ The FIA has not published its trigger values, so these are my own tuning values:
 
 ## How it works
 
+- Game builds: for each build it knows, 1.0.145 and 1.0.141, Spool Up has a table of the game's instructions it read its offsets from. Before it installs anything it compares them with the running game, and it runs on the build that matches in full. With none it stays idle, and the log names each build's first difference. The game files its `erp` overlays change are the same on both builds.
 - Which starts: the mode from Swofty's `session.start` (Grand Prix, Driver Career or My Team; Swofty reports online modes as unknown), then the game's own session type at the start lights, race or sprint. Swofty's session name stays on the weekend's first session, so it only counts when the game's type cannot be read.
 - `Sess_StartLights_Enter` (wrap): reads every car from the core's car table before it changes anything, then adds 5 s to the game's own countdown. The game's update counts it down, stops it while paused, then starts the lights. `Sess_RedFlagToRestart_Enter` (wrap) marks the next start as a red flag restart, which gets no extra seconds: the game's red flag system frees the cars on the message the update sends when its countdown ends.
 - `Sess_MarshalLights_UpdateZoneShader` (wrap, per panel, per tick): during Pre-Start it writes the game's own blue flag values, or its own off values on the flash's other half, just before the game sends them to the panel's shader. The game writes each panel again on its next tick, so nothing needs putting back.
@@ -105,7 +106,8 @@ The FIA has not published its trigger values, so these are my own tuning values:
 To check that it runs, look in the log (`swofty\loader.log` in your F1 25 folder, while the game runs) for:
 
 ```
-[gridstart] 0.3.1 ready: build check ok, ...
+[gridstart] 0.3.2 runs on F1 25 1.0.145 (Steam build 26566308)
+[gridstart] 0.3.2 ready: build check ok, ...
 [gridstart] StartLights enter: 23 cars, 22 F1 2026, 0 others with an ERS (handling version 9, max deploy 350000 W)
 [gridstart] run started: game delay 0.00 s, Pre-Start +5.00 s, launch model on, safety net on, AI on, spool 3.0 s at 10000 rpm
 [gridstart] lap counter shows PRE-START

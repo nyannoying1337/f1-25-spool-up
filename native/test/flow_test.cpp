@@ -527,7 +527,7 @@ static void fake_step(void *pt)
     c.cap_seen = c.ers.at<float>(ERS_MAX_DEPLOY);
     if (c.cap_seen != c.real_deploy)
         check(false, "the game's call sees the car's own max deploy");
-    uintptr_t curve = c.ers.at<uint8_t>(ERS_CURVE_FLAG) ? ERS_CURVE_2 : ERS_CURVE;
+    uintptr_t curve = c.ers.at<uint8_t>(g_curve_flag) ? ERS_CURVE_2 : ERS_CURVE;
     c.ers.at<float>(ERS_DEPLOY) = std::min(c.deploy_wanted, fake_eval(c.ers, curve, c.kmh / 3.6f) * c.cap_seen);
 }
 
@@ -552,7 +552,7 @@ static void load_point_curves(Car &c, uint32_t id)
         set_obf(c.ers, curve + SPLINE_OFFSET, 0.f, 0x3c3c0000u + id);
         set_obf(c.ers, curve + SPLINE_SAMPLES, 0.25f, 0x7e7e0000u + id);
     }
-    c.ers.at<uint8_t>(ERS_CURVE_FLAG) = 0;
+    c.ers.at<uint8_t>(g_curve_flag) = 0;
     keep_curves(c);
 }
 
@@ -1860,7 +1860,7 @@ static void test_safety_net()
 
     reset("safety net, the second curve");
     net_start(PLAYER);
-    g_car[PLAYER].ers.at<uint8_t>(ERS_CURVE_FLAG) = 1;
+    g_car[PLAYER].ers.at<uint8_t>(g_curve_flag) = 1;
     ticks(1.3);
     check(g_run[PLAYER].flagged && deploy_of(PLAYER) > 0.f, "the game reads the second curve, so that one answers");
 
@@ -2168,15 +2168,16 @@ static void test_state_gone()
     VirtualFree(page, 0, MEM_RELEASE);
 }
 
-// The offsets the code uses are the ones in the instructions the build check compares with the game.
+// The offsets the code uses are the ones in the instructions the build check compares with the game, on each build.
+static const GameBuild *g_checked_build = &BUILDS[0];
 static const CodeCheck &checked(const char *what)
 {
-    for (const auto &c : CODE_CHECKS)
-        if (!strcmp(c.what, what))
-            return c;
+    for (size_t i = 0; i < g_checked_build->n; i++)
+        if (!strcmp(g_checked_build->checks[i].what, what))
+            return g_checked_build->checks[i];
     printf("FAIL [offsets] no build check named %s\n", what);
     g_fails++;
-    return CODE_CHECKS[0];
+    return g_checked_build->checks[0];
 }
 static uintptr_t disp32(const CodeCheck &c, size_t at)
 {
@@ -2185,9 +2186,12 @@ static uintptr_t disp32(const CodeCheck &c, size_t at)
     return v;
 }
 
-static void test_offsets()
+static void test_offsets_of(const GameBuild &b)
 {
-    g_test = "offsets";
+    static std::string name;
+    name = std::string("offsets, ") + b.name;
+    g_test = name.c_str();
+    g_checked_build = &b;
     check(disp32(checked("the countdown"), 4) == ST_DELAY, "the countdown is the delay");
     const CodeCheck &lights = checked("lights object, state and mode");
     check(disp32(lights, 3) == ST_LIGHTS, "lights object");
@@ -2232,7 +2236,7 @@ static void test_offsets()
     const CodeCheck &dc = checked("deploy curve, first and second");
     uintptr_t add = checked("deploy curve call").bytes[3];
     check(dc.bytes[3] + add == ERS_CURVE && disp32(dc, 7) + add == ERS_CURVE_2, "the two curves, with what the call adds to them");
-    check(disp32(checked("deploy curve flag"), 3) == ERS_CURVE_FLAG, "the flag that picks the curve");
+    check(disp32(checked("deploy curve flag"), 3) == b.curve_flag, "the flag that picks the curve");
     check(disp32(checked("zone update shader switch"), 2) == MARSHAL_SHADERS, "the system's shader switch, tested against 0");
     check(checked("zone model").bytes[3] == ZONE_MODEL, "the zone's model");
     check(disp32(checked("zone model instance"), 3) == MODEL_INSTANCE, "the model's instance");
@@ -2240,6 +2244,33 @@ static void test_offsets()
     check(checked("two values sent").bytes[2] == 2 && ZONE_MODE == ZONE_COLOUR + 0x10, "two float4s: the colour and the mode behind it");
     check(checked("panels off, colour").bytes[5] == ZONE_COLOUR && checked("panels off, mode").bytes[5] == ZONE_MODE, "the game's off write");
     check(checked("blue flag, colour").bytes[5] == ZONE_COLOUR && checked("blue flag, mode").bytes[5] == ZONE_MODE, "the game's blue flag write");
+}
+
+// The tables are the same instructions: the same names, order and lengths, and the same bytes except where 1.0.145 moved
+// the curve flag or a callee.
+static void test_builds_agree()
+{
+    g_test = "builds agree";
+    const GameBuild &n = BUILDS[0], &k = BUILDS[1];
+    check(n.n == k.n && n.n == 49, "49 checks on each build");
+    int differ = 0;
+    for (size_t i = 0; i < std::min(n.n, k.n); i++) {
+        const CodeCheck &x = n.checks[i], &y = k.checks[i];
+        check(!strcmp(x.what, y.what) && x.n == y.n, y.what);
+        if (memcmp(x.bytes, y.bytes, x.n)) {
+            differ++;
+            check(!strcmp(x.what, "deploy curve flag") || !strcmp(x.what, "deploy curve call") || !strcmp(x.what, "the send"), x.what);
+        }
+    }
+    check(differ == 3, "three checks differ in their bytes");
+    check(n.curve_flag == k.curve_flag + 4, "the curve flag moved by four bytes");
+}
+
+static void test_offsets()
+{
+    for (const auto &b : BUILDS)
+        test_offsets_of(b);
+    test_builds_agree();
 }
 
 static void test_timeout()
@@ -2693,21 +2724,35 @@ static void test_init()
     g_test = "init";
     static SwoftyApi api = make_api();
     size_t size = 0;
-    for (const auto &c : CODE_CHECKS)
-        size = std::max(size, size_t(c.rva + c.n));
+    for (const auto &b : BUILDS)
+        for (size_t i = 0; i < b.n; i++)
+            size = std::max(size, size_t(b.checks[i].rva + b.checks[i].n));
     auto *image = static_cast<uint8_t *>(VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     g_image = reinterpret_cast<uintptr_t>(image);
-    for (const auto &c : CODE_CHECKS)
-        memcpy(image + c.rva, c.bytes, c.n);
+    auto load = [&](const GameBuild &b) {
+        memset(image, 0xcc, size);
+        for (size_t i = 0; i < b.n; i++)
+            memcpy(image + b.checks[i].rva, b.checks[i].bytes, b.checks[i].n);
+    };
 
-    // Another build: nothing is registered.
-    uint8_t keep = image[CODE_CHECKS[7].rva];
-    image[CODE_CHECKS[7].rva] ^= 0xff;
+    // Each build is found by its own checks.
+    g_api = &api;
+    for (const auto &b : BUILDS) {
+        load(b);
+        char why[320] = "";
+        check(running_build(why, sizeof why) == &b, b.name);
+    }
+
+    // A build it does not know: nothing is registered, and the log names each known build's first difference.
+    load(BUILDS[0]);
+    image[BUILDS[0].checks[7].rva] ^= 0xff;
     check(SwoftyAddonInit(&api) == 1, "a failed check is not a failed load");
     check(g_mixins.empty(), "another build: no hooks");
-    check(logged("idle: this game build differs"), "another build: logged");
+    check(logged("idle: this game build is none it knows (F1 25 1.0.145 (Steam build 26566308) differs at powertrain car and engine"),
+          "another build: logged, with the newer build's first difference");
+    check(logged("F1 25 1.0.141 (Steam build 25251167) differs at lights update prologue (0x2d8fcc0)); standard starts"), "and the older one's");
     check(!g_frame_fn, "another build: no frame callback");
-    image[CODE_CHECKS[7].rva] = keep;
+    image[BUILDS[0].checks[7].rva] ^= 0xff;
 
     // The older API
     SwoftyApi old = api;
@@ -2735,6 +2780,7 @@ static void test_init()
     check(std::find(g_events.begin(), g_events.end(), SWOFTY_EVENT_PAUSE) == g_events.end(), "no pause event: the catalogue says it never fires");
     check(std::find(g_events.begin(), g_events.end(), SWOFTY_EVENT_RACE_START) == g_events.end(), "no race.start: it fires before the lights");
     check(logged(" ready: build check ok"), "ready logged");
+    check(logged(" runs on F1 25 1.0.145 (Steam build 26566308)") && g_curve_flag == 0x1a66, "the build it runs on, with its curve flag");
     check(logged(", game HUD no"), "no game HUD without the core's export");
     check(g_want[0].load() == 1.f && g_want[MAX_CARS - 1].load() == 1.f, "no power wanted at the start");
 
@@ -2749,13 +2795,17 @@ static void test_init()
     VirtualFree(image, 0, MEM_RELEASE);
 }
 
-static void test_real_exe()
+// The game's own values in each exe, in BUILDS' order: the panel's blue and its plain lit mode.
+struct ExeValues {
+    uintptr_t blue, lit;
+};
+static const ExeValues EXE_VALUES[] = {{0x53849d0, 0x55da5b0}, {0x53829d0, 0x55d85b0}};
+
+static void check_exe(const wchar_t *path, const char *label, const GameBuild *want)
 {
-    g_test = "real exe";
-    const wchar_t *path = L"F:\\SteamLibrary\\steamapps\\common\\F1 25\\F1_25.exe";
     HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
-        puts("flow_test: the game's exe is not here, build bytes not compared");
+        printf("flow_test: %s is not here, its bytes not compared\n", label);
         return;
     }
     HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr);
@@ -2765,36 +2815,52 @@ static void test_real_exe()
         auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(d);
         auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS64 *>(d + dos->e_lfanew);
         auto *sec = IMAGE_FIRST_SECTION(nt);
-        int ok = 0, total = 0;
-        for (const auto &c : CODE_CHECKS) {
-            total++;
+        auto at = [&](uintptr_t rva, size_t n) -> const uint8_t * {
             for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
-                if (c.rva >= sec[i].VirtualAddress && c.rva < sec[i].VirtualAddress + sec[i].Misc.VirtualSize) {
-                    bool same = memcmp(d + sec[i].PointerToRawData + (c.rva - sec[i].VirtualAddress), c.bytes, c.n) == 0;
-                    ok += same;
-                    if (!same)
-                        printf("FAIL [real exe] %s at 0x%llx\n", c.what, static_cast<unsigned long long>(c.rva));
-                    break;
-                }
-        }
-        check(ok == total, "every build check matches the installed game");
-        auto game_value = [&](uintptr_t rva) -> const uint8_t * {
-            for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
-                if (rva >= sec[i].VirtualAddress && rva + 16 <= sec[i].VirtualAddress + sec[i].Misc.VirtualSize)
+                if (rva >= sec[i].VirtualAddress && rva + n <= sec[i].VirtualAddress + sec[i].Misc.VirtualSize)
                     return d + sec[i].PointerToRawData + (rva - sec[i].VirtualAddress);
             return nullptr;
         };
-        const uint8_t *blue = game_value(0x53829d0), *lit = game_value(0x55d85b0);
-        check(blue && !memcmp(blue, PANEL_BLUE, 16), "the panel's blue is the value the game's blue flag is made from");
-        check(lit && !memcmp(lit, PANEL_LIT, 16), "the panel's mode is the game's plain lit panel");
-        const float none[4] = {};
-        check(!memcmp(PANEL_OFF, none, 16), "off is all zero, as the game's update writes it");
-        printf("flow_test: %d of %d build checks match the installed game\n", ok, total);
+        const GameBuild *found = nullptr;
+        for (size_t k = 0; k < std::size(BUILDS); k++) {
+            const GameBuild &b = BUILDS[k];
+            size_t ok = 0;
+            const CodeCheck *bad = nullptr;
+            for (size_t i = 0; i < b.n; i++) {
+                const uint8_t *p = at(b.checks[i].rva, b.checks[i].n);
+                bool same = p && !memcmp(p, b.checks[i].bytes, b.checks[i].n);
+                ok += same;
+                if (!same && !bad)
+                    bad = &b.checks[i];
+            }
+            if (ok != b.n) {
+                printf("flow_test: %s is not %s: %zu of %zu build checks match, the first difference at %s\n", label, b.name, ok, b.n, bad->what);
+                continue;
+            }
+            check(!found, "one build matches");
+            found = &b;
+            const uint8_t *blue = at(EXE_VALUES[k].blue, 16), *lit = at(EXE_VALUES[k].lit, 16);
+            check(blue && !memcmp(blue, PANEL_BLUE, 16), "the panel's blue is the value the game's blue flag is made from");
+            check(lit && !memcmp(lit, PANEL_LIT, 16), "the panel's mode is the game's plain lit panel");
+            printf("flow_test: %s is %s: %zu of %zu build checks match\n", label, b.name, ok, b.n);
+        }
+        check(found != nullptr, label);
+        if (want)
+            check(found == want, label);
         UnmapViewOfFile(d);
     }
     if (m)
         CloseHandle(m);
     CloseHandle(f);
+}
+
+static void test_real_exe()
+{
+    g_test = "real exe";
+    check_exe(L"F:\\SteamLibrary\\steamapps\\common\\F1 25\\F1_25.exe", "the installed game", nullptr);
+    check_exe(L"F:\\f1-25-exe-backup\\steam-25251167\\F1_25.exe", "the saved 1.0.141 exe", &BUILDS[1]);
+    const float none[4] = {};
+    check(!memcmp(PANEL_OFF, none, 16), "off is all zero, as the game's update writes it");
 }
 
 static void test_manifest()
@@ -2809,6 +2875,7 @@ static void test_manifest()
     for (const char *id : {"pre_start", "launch_model", "safety_net", "apply_to_ai", "spool_seconds", "spool_rpm"})
         check(s.find(std::string("\"id\": \"") + id + "\"") != std::string::npos, id);
     check(s.find("ice_share") == std::string::npos, "the 2025-car slider is gone");
+    check(s.find("\"game_builds\": [\"=25251167\", \"=26566308\"]") != std::string::npos, "the manifest names the two builds the code knows");
 }
 
 int main(int argc, char **)

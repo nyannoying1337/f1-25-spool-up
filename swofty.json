@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "nick.grid-start-2026",
   "name": "Spool Up: 2026 Race Starts",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": "nyannoying",
   "description": "The 2026 start the game leaves out, on F1 2026 cars: a 5 s Pre-Start, a turbo you spool yourself, AI that can fumble and the low-output safety net. Offline Grand Prix and Career, races and sprints. Other cars keep the game's normal start.",
   "license": "LicenseRef-Spool-Up-Attribution-1.0",
@@ -11,7 +11,7 @@
   "icon": "icon.png",
   "kind": ["erp", "text", "native"],
   "category": "utility",
-  "compat": { "game": "f1_25", "game_builds": [], "launcher": ">=1.8.38", "platforms": ["steam"] },
+  "compat": { "game": "f1_25", "game_builds": ["=25251167", "=26566308"], "seasons": ["f1_2026"], "launcher": ">=1.8.38", "platforms": ["steam"] },
   "requires": [{ "id": "swofty.core", "version": ">=0.2.13" }],
   "experimental_features": ["overlay"],
   "options": [
